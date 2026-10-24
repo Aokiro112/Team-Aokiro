@@ -11,6 +11,7 @@ from backend.app.api.routes.documents import router as documents_router
 from backend.app.api.routes.graph import router as graph_router
 from backend.app.api.routes.health import router as health_router
 from backend.app.api.routes.jobs import router as jobs_router
+from backend.app.api.routes.models import router as models_router
 from backend.app.api.routes.topics import router as topics_router
 from backend.app.core.config import settings
 from backend.app.core.exceptions import NexusException, nexus_exception_handler
@@ -85,6 +86,7 @@ app.include_router(health_router, prefix=settings.API_V1_STR)
 app.include_router(documents_router, prefix=settings.API_V1_STR)
 app.include_router(jobs_router, prefix=settings.API_V1_STR)
 app.include_router(chat_router, prefix=settings.API_V1_STR)
+app.include_router(models_router, prefix=settings.API_V1_STR)
 app.include_router(graph_router, prefix=settings.API_V1_STR)
 app.include_router(topics_router, prefix=settings.API_V1_STR)
 

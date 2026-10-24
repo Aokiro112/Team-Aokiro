@@ -73,3 +73,16 @@ def test_graph_endpoints_pagination_and_search(client):
     search_resp = client.get("/api/v1/graph/search?q=Computer&limit=5")
     assert search_resp.status_code == status.HTTP_200_OK
     assert "total_matches" in search_resp.json()
+
+
+def test_models_list_endpoint(client):
+    resp = client.get("/api/v1/models")
+    assert resp.status_code == status.HTTP_200_OK
+    data = resp.json()
+    assert "active_model" in data
+    assert "models" in data
+    assert len(data["models"]) >= 1
+    # Check that rule_based is always available
+    model_names = [m["name"] for m in data["models"]]
+    assert "rule_based" in model_names
+

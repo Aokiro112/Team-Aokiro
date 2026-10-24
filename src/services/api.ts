@@ -11,6 +11,8 @@ import {
   TopicDetailResponse,
   TopicListResponse,
   TopicModel,
+  ModelItem,
+  ModelsListResponse,
 } from '../types/backend';
 import {
   INITIAL_CHAT_MESSAGES,
@@ -39,7 +41,7 @@ export function getAppConfig(): AppConfig {
   }
   return {
     apiBaseUrl: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1',
-    useMock: true, // Default to true as requested: "connect mat karna filhal backend"
+    useMock: false, // Default to live backend
   };
 }
 
@@ -474,6 +476,76 @@ export const chatApi = {
       ],
       warnings: [],
       metadata: { latency_ms: 45 },
+    };
+  },
+};
+
+// ==========================================
+// MODELS API
+// ==========================================
+export const modelsApi = {
+  async getAvailableModels(): Promise<ModelsListResponse> {
+    const config = getAppConfig();
+    if (!config.useMock) {
+      try {
+        const res = await fetch(`${config.apiBaseUrl}/models`);
+        if (res.ok) {
+          return await res.json();
+        }
+      } catch (err) {
+        console.warn('Backend /models endpoint call failed, falling back:', err);
+      }
+    }
+
+    return {
+      active_model: 'qwen3:1.7b',
+      provider: 'ollama',
+      models: [
+        {
+          name: 'rule_based',
+          display_name: 'Deterministic Grounding Engine',
+          provider: 'rule_based',
+          is_local: true,
+          is_default: false,
+          description: 'Offline, extractive, zero-hallucination citation engine.',
+        },
+        {
+          name: 'qwen3:1.7b',
+          display_name: 'qwen3:1.7b (2.0B)',
+          provider: 'ollama',
+          is_local: true,
+          is_default: true,
+          parameter_size: '2.0B',
+          description: 'Local Ollama Qwen 3 model.',
+        },
+        {
+          name: 'qwen3.5:4b',
+          display_name: 'qwen3.5:4b (4.2B)',
+          provider: 'ollama',
+          is_local: true,
+          is_default: false,
+          parameter_size: '4.2B',
+          description: 'Local Ollama Qwen 3.5 model.',
+        },
+        {
+          name: 'aokiro:latest',
+          display_name: 'aokiro:latest (7.6B)',
+          provider: 'ollama',
+          is_local: true,
+          is_default: false,
+          parameter_size: '7.6B',
+          description: 'Fine-tuned local assistant.',
+        },
+        {
+          name: 'qwen2.5-coder:7b-instruct-q4_K_M',
+          display_name: 'qwen2.5-coder (7.6B)',
+          provider: 'ollama',
+          is_local: true,
+          is_default: false,
+          parameter_size: '7.6B',
+          description: 'Local code intelligence model.',
+        },
+      ],
     };
   },
 };

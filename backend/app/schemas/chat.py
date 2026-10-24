@@ -45,6 +45,7 @@ class QueryRequest(BaseModel):
     include_graph: bool = True
     max_citations: int = Field(default=5, ge=1, le=20)
     retrieval_strategy_override: Optional[RetrievalStrategy] = None
+    model: Optional[str] = None
 
 
 class QueryResponse(BaseModel):
@@ -60,4 +61,5 @@ class QueryResponse(BaseModel):
     supporting_paths: List[GraphPath] = Field(default_factory=list)
     retrieval_trace: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
+    model_used: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)

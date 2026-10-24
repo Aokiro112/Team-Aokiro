@@ -217,6 +217,7 @@ export interface QueryRequest {
   include_graph?: boolean;
   max_citations?: number;
   retrieval_strategy_override?: RetrievalStrategy | null;
+  model?: string;
 }
 
 export interface QueryResponse {
@@ -232,7 +233,25 @@ export interface QueryResponse {
   supporting_paths: GraphPath[];
   retrieval_trace: string[];
   warnings: string[];
+  model_used?: string;
   metadata: Record<string, any>;
+}
+
+export interface ModelItem {
+  name: string;
+  display_name: string;
+  provider: string;
+  parameter_size?: string | null;
+  size_bytes?: number | null;
+  is_local: boolean;
+  is_default: boolean;
+  description?: string | null;
+}
+
+export interface ModelsListResponse {
+  active_model: string;
+  provider: string;
+  models: ModelItem[];
 }
 
 // ==========================================

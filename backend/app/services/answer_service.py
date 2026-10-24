@@ -88,13 +88,15 @@ class AnswerService:
 
         supporting_passages = [c.get("text", "") for c in chunks[:3]]
 
-        # 4. Generate Answer Text
-        answer_text = await self._synthesize_answer_text(
+        # 4. Determine Target Model & Generate Answer Text
+        requested_model = request.model or (self.model if self.llm_provider == "ollama" else "rule_based")
+        answer_text, actual_model_used = await self._synthesize_answer_text(
             query=request.query,
             chunks=chunks,
             paths=paths,
             citations=citations,
             intent=intent,
+            requested_model=requested_model,
         )
 
         return QueryResponse(
@@ -110,6 +112,7 @@ class AnswerService:
             supporting_paths=paths,
             retrieval_trace=trace,
             warnings=warnings,
+            model_used=actual_model_used,
         )
 
     def _assess_evidence_consistency(self, chunks: List[Dict[str, Any]]) -> (EvidenceSufficiency, Optional[str]):
@@ -139,7 +142,8 @@ class AnswerService:
         paths: List[GraphPath],
         citations: List[Any],
         intent: QueryIntent,
-    ) -> str:
+        requested_model: Optional[str] = None,
+    ) -> (str, str):
         """Call LLM or deterministic fallback to produce grounded answer."""
         context_parts = []
         chunk_map = {
@@ -156,27 +160,36 @@ class AnswerService:
 
         context = "\n\n".join(context_parts)
 
-        # Try LLM if available
-        if self.llm_provider == "ollama" and self.base_url:
-            try:
-                ans = await self._call_ollama(query, context)
-                if ans:
-                    return ans
-            except Exception as e:
-                logger.warning(f"Ollama answer generation failed: {e}")
+        # 1. Deterministic Rule-Based Grounding explicitly requested
+        if requested_model == "rule_based":
+            ans = self._extractive_grounded_synthesis(query, chunks, paths, citations)
+            return ans, "rule_based"
 
-        elif self.llm_provider == "openai" and settings.LLM_API_KEY:
+        # 2. Try Ollama (either requested model or default configured)
+        ollama_model = requested_model or self.model
+        if self.base_url:
+            try:
+                ans = await self._call_ollama(query, context, model=ollama_model)
+                if ans:
+                    return ans, ollama_model
+            except Exception as e:
+                logger.warning(f"Ollama ({ollama_model}) answer generation failed: {e}")
+
+        # 3. Try OpenAI if configured
+        if self.llm_provider == "openai" and settings.LLM_API_KEY:
             try:
                 ans = await self._call_openai(query, context)
                 if ans:
-                    return ans
+                    return ans, self.model
             except Exception as e:
                 logger.warning(f"OpenAI answer generation failed: {e}")
 
-        # Deterministic Grounded Synthesis Fallback
-        return self._extractive_grounded_synthesis(query, chunks, paths, citations)
+        # 4. Fallback to Deterministic Grounded Synthesis
+        ans = self._extractive_grounded_synthesis(query, chunks, paths, citations)
+        return ans, "rule_based"
 
-    async def _call_ollama(self, query: str, context: str) -> Optional[str]:
+    async def _call_ollama(self, query: str, context: str, model: Optional[str] = None) -> Optional[str]:
+        target_model = model or self.model
         prompt = f"""You are NEXUS AI, an evidence-grounded document assistant.
 Answer the user's question using ONLY the provided evidence.
 Do not assume or fabricate facts. Always cite sources like [1], [2].
@@ -191,7 +204,7 @@ Answer:"""
             resp = await client.post(
                 f"{self.base_url}/api/generate",
                 json={
-                    "model": self.model,
+                    "model": target_model,
                     "prompt": prompt,
                     "stream": False,
                     "options": {"temperature": 0.0},

@@ -12,6 +12,7 @@ import {
   CheckCircle,
   HelpCircle,
   RefreshCw,
+  Cpu,
 } from 'lucide-react';
 import { Citation, QueryRequest, QueryResponse, RetrievalStrategy } from '../types/backend';
 import { chatApi } from '../services/api';
@@ -22,6 +23,9 @@ interface AskChatViewProps {
 }
 
 export const AskChatView: React.FC<AskChatViewProps> = ({ onOpenCitation }) => {
+  const [selectedModel, setSelectedModel] = useState<string>(
+    () => localStorage.getItem('nexus_selected_model') || 'qwen3:1.7b'
+  );
   const [messages, setMessages] = useState<
     Array<{
       id: string;
@@ -47,6 +51,16 @@ export const AskChatView: React.FC<AskChatViewProps> = ({ onOpenCitation }) => {
     scrollToBottom();
   }, [messages, isLoading]);
 
+  useEffect(() => {
+    const handleModelChange = (e: any) => {
+      if (e.detail) {
+        setSelectedModel(e.detail);
+      }
+    };
+    window.addEventListener('nexus_model_changed', handleModelChange);
+    return () => window.removeEventListener('nexus_model_changed', handleModelChange);
+  }, []);
+
   const handleSendMessage = async (textToSend?: string) => {
     const q = textToSend || inputQuery;
     if (!q.trim() || isLoading) return;
@@ -70,6 +84,7 @@ export const AskChatView: React.FC<AskChatViewProps> = ({ onOpenCitation }) => {
         include_graph: true,
         max_citations: 5,
         retrieval_strategy_override: selectedStrategy,
+        model: selectedModel,
       };
 
       const res = await chatApi.queryKnowledgeBase(request);
@@ -112,8 +127,13 @@ export const AskChatView: React.FC<AskChatViewProps> = ({ onOpenCitation }) => {
           </p>
         </div>
 
-        {/* Top Right Options: Deep Search & Expand */}
+        {/* Top Right Options: Model Badge, Deep Search & Expand */}
         <div className="flex items-center gap-2 relative">
+          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-neutral-100 border border-neutral-200/80 text-xs font-mono text-neutral-700 shadow-2xs">
+            <Cpu size={13} className="text-emerald-600" />
+            <span className="font-semibold truncate max-w-[140px]">{selectedModel}</span>
+          </div>
+
           <button
             onClick={() => {
               setIsDeepSearch(!isDeepSearch);
@@ -240,6 +260,14 @@ export const AskChatView: React.FC<AskChatViewProps> = ({ onOpenCitation }) => {
                         {ent.canonical_name}
                       </span>
                     ))}
+                  </div>
+                )}
+
+                {/* Inference Model Used Badge */}
+                {!isUser && msg.response?.model_used && (
+                  <div className="mt-3 pt-2 border-t border-neutral-100/70 flex items-center gap-1.5 text-[10px] text-neutral-400 font-mono">
+                    <Cpu size={11} className="text-emerald-500" />
+                    <span>Inference: <strong className="text-neutral-700 font-semibold">{msg.response.model_used}</strong></span>
                   </div>
                 )}
               </div>

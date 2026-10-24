@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { X, CheckCircle, AlertCircle, RefreshCw, Server, Database, Shield } from 'lucide-react';
-import { getAppConfig, saveAppConfig, AppConfig } from '../../services/api';
+import React, { useState, useEffect } from 'react';
+import { X, CheckCircle, AlertCircle, RefreshCw, Server, Database, Shield, Cpu } from 'lucide-react';
+import { getAppConfig, saveAppConfig, AppConfig, modelsApi } from '../../services/api';
+import { ModelItem } from '../../types/backend';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -14,13 +15,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onConfigChange,
 }) => {
   const [config, setConfig] = useState<AppConfig>(getAppConfig());
+  const [models, setModels] = useState<ModelItem[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>(
+    () => localStorage.getItem('nexus_selected_model') || 'qwen3:1.7b'
+  );
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'failed'>('idle');
   const [statusMessage, setStatusMessage] = useState('');
+
+  useEffect(() => {
+    if (isOpen) {
+      modelsApi.getAvailableModels().then((res) => {
+        setModels(res.models);
+      }).catch(console.warn);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   const handleSave = () => {
     saveAppConfig(config);
+    localStorage.setItem('nexus_selected_model', selectedModel);
+    window.dispatchEvent(new CustomEvent('nexus_model_changed', { detail: selectedModel }));
     if (onConfigChange) onConfigChange();
     onClose();
   };
@@ -123,6 +138,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span>{statusMessage}</span>
               </div>
             )}
+          </div>
+
+          {/* Model Selection */}
+          <div>
+            <label className="block text-xs font-semibold text-neutral-700 mb-1.5">
+              Default Inference Model
+            </label>
+            <div className="flex items-center gap-2 p-2 rounded-xl border border-neutral-200 bg-neutral-50/50">
+              <Cpu size={16} className="text-emerald-600 ml-1 shrink-0" />
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="w-full text-xs bg-transparent focus:outline-none font-medium text-neutral-800 cursor-pointer"
+              >
+                {models.map((m) => (
+                  <option key={m.name} value={m.name}>
+                    {m.name} {m.parameter_size ? `(${m.parameter_size})` : ''} - {m.provider}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {/* Architecture Architecture Details */}
