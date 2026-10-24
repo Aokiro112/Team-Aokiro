@@ -142,8 +142,13 @@ class AnswerService:
     ) -> str:
         """Call LLM or deterministic fallback to produce grounded answer."""
         context_parts = []
+        chunk_map = {
+            (ch.get("chunk_id") or ch.get("id")): (ch.get("text") or ch.get("document", ""))
+            for ch in chunks
+        }
         for idx, c in enumerate(citations):
-            context_parts.append(f"[{idx+1}] (Doc: {c.document_filename}, Page: {c.page_number}):\n{c.excerpt}")
+            evidence_text = chunk_map.get(c.chunk_id) or c.excerpt
+            context_parts.append(f"[{idx+1}] (Doc: {c.document_filename}, Page: {c.page_number}):\n{evidence_text}")
 
         if paths:
             path_desc = "\n".join([f"- Path: {p.description}" for p in paths])
