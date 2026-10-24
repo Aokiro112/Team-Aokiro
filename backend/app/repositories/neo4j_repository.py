@@ -12,6 +12,15 @@ from backend.app.schemas.graph import EdgeModel, GraphPath, NodeModel
 from backend.app.schemas.topics import TopicModel
 
 
+def _clean_id_to_name(raw: str) -> str:
+    """Convert an internal entity or topic slug/hash ID into a clean display title."""
+    if raw.startswith("ent_") or raw.startswith("top_") or raw.startswith("doc_"):
+        parts = raw.split("_")
+        if len(parts) >= 2:
+            return parts[1].replace("-", " ").title()
+    return raw
+
+
 class InMemoryGraphEngine:
     """NetworkX-based in-memory graph engine implementing the knowledge graph contract."""
 
@@ -22,6 +31,49 @@ class InMemoryGraphEngine:
         self.document_nodes: Dict[str, Dict[str, Any]] = {}
         self.chunk_nodes: Dict[str, Dict[str, Any]] = {}
         self.topic_nodes: Dict[str, TopicModel] = {}
+        self.storage_file = settings.STORAGE_DIR / "graph.json"
+        self._load_from_disk()
+
+    def _load_from_disk(self) -> None:
+        if not self.storage_file.exists():
+            return
+        try:
+            with open(self.storage_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for n_dict in data.get("entities", []):
+                node = NodeModel(**n_dict)
+                self.entity_nodes[node.id] = node
+                self.graph.add_node(node.id, canonical_name=node.canonical_name, entity_type=node.entity_type)
+            for e_dict in data.get("edges", []):
+                edge = EdgeModel(**e_dict)
+                self.edge_records[edge.id] = edge
+                self.graph.add_edge(edge.source, edge.target, key=edge.id, relationship_type=edge.relationship_type)
+            for t_dict in data.get("topics", []):
+                top = TopicModel(**t_dict)
+                self.topic_nodes[top.id] = top
+            self.document_nodes = data.get("documents", {})
+            self.chunk_nodes = data.get("chunks", {})
+            for nid, node in self.entity_nodes.items():
+                if self.graph.has_node(nid):
+                    node.degree = self.graph.degree(nid)
+            logger.info(f"Loaded {len(self.entity_nodes)} nodes and {len(self.edge_records)} edges from graph persistence.")
+        except Exception as e:
+            logger.warning(f"Failed to load persistent graph: {e}")
+
+    def _save_to_disk(self) -> None:
+        try:
+            self.storage_file.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "entities": [n.model_dump() for n in self.entity_nodes.values()],
+                "edges": [e.model_dump() for e in self.edge_records.values()],
+                "topics": [t.model_dump() for t in self.topic_nodes.values()],
+                "documents": self.document_nodes,
+                "chunks": self.chunk_nodes,
+            }
+            with open(self.storage_file, "w", encoding="utf-8") as f:
+                json.dump(payload, f, default=str)
+        except Exception as e:
+            logger.warning(f"Failed to save persistent graph: {e}")
 
     def upsert_entity(self, node: NodeModel) -> None:
         if node.id in self.entity_nodes:
@@ -57,9 +109,9 @@ class InMemoryGraphEngine:
     def upsert_edge(self, edge: EdgeModel) -> None:
         # Ensure source and target exist
         if not self.graph.has_node(edge.source):
-            self.upsert_entity(NodeModel(id=edge.source, canonical_name=edge.source))
+            self.upsert_entity(NodeModel(id=edge.source, canonical_name=_clean_id_to_name(edge.source)))
         if not self.graph.has_node(edge.target):
-            self.upsert_entity(NodeModel(id=edge.target, canonical_name=edge.target))
+            self.upsert_entity(NodeModel(id=edge.target, canonical_name=_clean_id_to_name(edge.target)))
 
         if edge.id in self.edge_records:
             existing = self.edge_records[edge.id]
@@ -112,14 +164,53 @@ class InMemoryGraphEngine:
 
     def upsert_topic(self, topic: TopicModel) -> None:
         self.topic_nodes[topic.id] = topic
+        # Register topic as an interactive node in the knowledge graph
+        if topic.id not in self.entity_nodes:
+            topic_node = NodeModel(
+                id=topic.id,
+                canonical_name=topic.name,
+                entity_type="Topic",
+                description=topic.description,
+                document_ids=topic.document_ids,
+                topic_ids=[topic.id],
+            )
+            self.entity_nodes[topic.id] = topic_node
+            self.graph.add_node(topic.id, canonical_name=topic.name, entity_type="Topic")
 
     def link_topic_to_entity(self, topic_id: str, entity_id: str) -> None:
         if topic_id in self.topic_nodes and entity_id in self.entity_nodes:
-            if entity_id not in self.topic_nodes[topic_id].entity_ids:
-                self.topic_nodes[topic_id].entity_ids.append(entity_id)
-                self.topic_nodes[topic_id].entity_count = len(self.topic_nodes[topic_id].entity_ids)
+            topic = self.topic_nodes[topic_id]
+            if entity_id not in topic.entity_ids:
+                topic.entity_ids.append(entity_id)
+                topic.entity_count = len(topic.entity_ids)
             if topic_id not in self.entity_nodes[entity_id].topic_ids:
                 self.entity_nodes[entity_id].topic_ids.append(topic_id)
+
+            # Ensure topic node exists in entity_nodes
+            if topic_id not in self.entity_nodes:
+                self.entity_nodes[topic_id] = NodeModel(
+                    id=topic_id,
+                    canonical_name=topic.name,
+                    entity_type="Topic",
+                    description=topic.description,
+                    document_ids=topic.document_ids,
+                    topic_ids=[topic.id],
+                )
+                self.graph.add_node(topic_id, canonical_name=topic.name, entity_type="Topic")
+
+            # Create an explicit BELONGS_TO_TOPIC edge
+            edge_id = f"rel_{topic_id}_{entity_id}"
+            if edge_id not in self.edge_records:
+                edge = EdgeModel(
+                    id=edge_id,
+                    source=topic_id,
+                    target=entity_id,
+                    relationship_type="BELONGS_TO_TOPIC",
+                    evidence=f"Associated with thematic topic '{topic.name}'",
+                    confidence=0.95,
+                    document_ids=topic.document_ids,
+                )
+                self.upsert_edge(edge)
 
     def link_topic_to_document(self, topic_id: str, doc_id: str) -> None:
         if topic_id in self.topic_nodes:
@@ -138,7 +229,10 @@ class InMemoryGraphEngine:
         if entity_type:
             nodes = [n for n in nodes if n.entity_type.lower() == entity_type.lower()]
         if topic_id:
-            nodes = [n for n in nodes if topic_id in n.topic_ids]
+            nodes = [n for n in nodes if topic_id in n.topic_ids or n.id == topic_id]
+        
+        # Sort nodes by degree descending so highly connected/salient entities appear first
+        nodes = sorted(nodes, key=lambda n: n.degree, reverse=True)
         total = len(nodes)
         paged = nodes[offset : offset + limit]
         return paged, total
@@ -296,6 +390,8 @@ class InMemoryGraphEngine:
             if document_id in topic.document_ids:
                 topic.document_ids.remove(document_id)
                 topic.document_count = len(topic.document_ids)
+
+        self._save_to_disk()
 
 
 class Neo4jRepository:

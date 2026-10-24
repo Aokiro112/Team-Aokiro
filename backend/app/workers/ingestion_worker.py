@@ -158,6 +158,10 @@ class IngestionWorker:
             )
             job["stage_durations"]["topics"] = time.time() - t_stage
 
+            # Persist in-memory knowledge graph to disk for zero-loss recovery
+            if hasattr(self.graph_repo, "memory_engine") and hasattr(self.graph_repo.memory_engine, "_save_to_disk"):
+                self.graph_repo.memory_engine._save_to_disk()
+
             # Stage 9: Validate Indexing Consistency
             update_stage(JobStage.VALIDATING_CONSISTENCY, 98.0)
             t_stage = time.time()

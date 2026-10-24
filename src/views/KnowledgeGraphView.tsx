@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Search,
   Plus,
@@ -10,6 +10,8 @@ import {
   ArrowRight,
   Sparkles,
   Share2,
+  Compass,
+  Network,
 } from 'lucide-react';
 import { NodeModel, EdgeModel, NodeDetailResponse } from '../types/backend';
 import { graphApi } from '../services/api';
@@ -18,89 +20,184 @@ interface KnowledgeGraphViewProps {
   onNavigateToDocuments?: () => void;
 }
 
+interface NodeSimState {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  anchorX: number;
+  anchorY: number;
+  width: number;
+  height: number;
+  isTopic: boolean;
+}
+
 export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   onNavigateToDocuments,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [nodes, setNodes] = useState<NodeModel[]>([]);
-  const [edges, setEdges] = useState<EdgeModel[]>([]);
+  const [rawNodes, setRawNodes] = useState<NodeModel[]>([]);
+  const [rawEdges, setRawEdges] = useState<EdgeModel[]>([]);
   const [filterType, setFilterType] = useState<string>('All');
+  const [densityLimit, setDensityLimit] = useState<'core' | 'standard' | 'all'>('standard');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedNode, setSelectedNode] = useState<NodeModel | null>(null);
   const [nodeDetail, setNodeDetail] = useState<NodeDetailResponse | null>(null);
 
   // Transform and interaction state
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(0.85);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [isDraggingCanvas, setIsDraggingCanvas] = useState(false);
+  const [dragCanvasStart, setDragCanvasStart] = useState({ x: 0, y: 0 });
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
 
-  // Node positions in canvas coordinate space
-  const nodePositionsRef = useRef<
-    Map<string, { x: number; y: number; vx: number; vy: number; isCenter?: boolean }>
-  >(new Map());
+  // Physics simulation state ref
+  const nodeSimMapRef = useRef<Map<string, NodeSimState>>(new Map());
 
   // Load Graph Data
-  useEffect(() => {
-    const fetchGraph = async () => {
-      const data = await graphApi.getGraph(50, 0, filterType === 'All' ? undefined : filterType);
-      setNodes(data.nodes);
-      setEdges(data.edges);
+  const fetchGraph = async () => {
+    try {
+      const data = await graphApi.getGraph(150, 0, filterType === 'All' ? undefined : filterType);
+      setRawNodes(data.nodes);
+      setRawEdges(data.edges);
 
-      // Default select highest degree node
       const sorted = [...data.nodes].sort((a, b) => (b.degree || 0) - (a.degree || 0));
       const primaryNode = sorted[0];
-      if (primaryNode) {
+      if (primaryNode && !selectedNode) {
         setSelectedNode(primaryNode);
         const detail = await graphApi.getNodeDetails(primaryNode.id);
         setNodeDetail(detail);
       }
-    };
+    } catch (err) {
+      console.warn('Failed to load graph in KnowledgeGraphView:', err);
+    }
+  };
+
+  useEffect(() => {
     fetchGraph();
   }, [filterType]);
 
-  // Handle Node selection
   const handleSelectNode = async (node: NodeModel) => {
     setSelectedNode(node);
-    const detail = await graphApi.getNodeDetails(node.id);
-    setNodeDetail(detail);
+    try {
+      const detail = await graphApi.getNodeDetails(node.id);
+      setNodeDetail(detail);
+    } catch (err) {
+      console.warn('Failed to load node detail:', err);
+    }
   };
 
-  // Initialize node layout positions (radial around Transformer matching the screenshot)
+  // Filter and prioritize nodes by density limit
+  const activeNodes = useMemo(() => {
+    let list = [...rawNodes];
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(
+        (n) => n.canonical_name.toLowerCase().includes(q) || n.entity_type.toLowerCase().includes(q)
+      );
+    }
+
+    if (densityLimit === 'core') {
+      const topics = list.filter((n) => n.entity_type === 'Topic');
+      const nonTopics = list.filter((n) => n.entity_type !== 'Topic').slice(0, 15);
+      return [...topics, ...nonTopics];
+    } else if (densityLimit === 'standard') {
+      const topics = list.filter((n) => n.entity_type === 'Topic');
+      const nonTopics = list.filter((n) => n.entity_type !== 'Topic').slice(0, 35);
+      return [...topics, ...nonTopics];
+    }
+    return list;
+  }, [rawNodes, densityLimit, searchQuery]);
+
+  const activeNodeIds = useMemo(() => new Set(activeNodes.map((n) => n.id)), [activeNodes]);
+
+  const activeEdges = useMemo(() => {
+    return rawEdges.filter((e) => activeNodeIds.has(e.source) && activeNodeIds.has(e.target));
+  }, [rawEdges, activeNodeIds]);
+
+  const topicList = useMemo(() => {
+    return rawNodes.filter((n) => n.entity_type === 'Topic');
+  }, [rawNodes]);
+
+  // Initialize Clustered Thematic Positions
   useEffect(() => {
-    if (nodes.length === 0) return;
+    if (activeNodes.length === 0) return;
 
-    const positions = new Map<
-      string,
-      { x: number; y: number; vx: number; vy: number; isCenter?: boolean }
-    >();
+    const simMap = nodeSimMapRef.current;
+    const topicNodes = activeNodes.filter((n) => n.entity_type === 'Topic');
+    const T = topicNodes.length || 1;
+    const clusterRadius = Math.max(280, 180 + T * 35);
 
-    const sorted = [...nodes].sort((a, b) => (b.degree || 0) - (a.degree || 0));
-    const centerNode = sorted[0];
-
-    // Center node position (0, 0 in canvas center)
-    positions.set(centerNode.id, { x: 0, y: 0, vx: 0, vy: 0, isCenter: true });
-
-    // Other connected nodes radially distributed
-    const otherNodes = nodes.filter((n) => n.id !== centerNode.id);
-    const radius = 240;
-    const angleStep = (2 * Math.PI) / (otherNodes.length || 1);
-
-    otherNodes.forEach((node, idx) => {
-      const angle = idx * angleStep - Math.PI / 2;
-      // Stagger radius slightly for organic natural appearance
-      const r = radius + (idx % 2 === 0 ? 30 : -25);
-      positions.set(node.id, {
-        x: Math.cos(angle) * r,
-        y: Math.sin(angle) * r,
-        vx: 0,
-        vy: 0,
-      });
+    const topicAnchorMap = new Map<string, { x: number; y: number }>();
+    topicNodes.forEach((top, idx) => {
+      const angle = (2 * Math.PI * idx) / T - Math.PI / 2;
+      const ax = Math.cos(angle) * clusterRadius;
+      const ay = Math.sin(angle) * clusterRadius;
+      topicAnchorMap.set(top.id, { x: ax, y: ay });
     });
 
-    nodePositionsRef.current = positions;
-  }, [nodes]);
+    activeNodes.forEach((node, idx) => {
+      const isTopic = node.entity_type === 'Topic';
+      let ax = 0;
+      let ay = 0;
+
+      if (isTopic) {
+        const anchor = topicAnchorMap.get(node.id) || { x: 0, y: 0 };
+        ax = anchor.x;
+        ay = anchor.y;
+      } else {
+        const matchedAnchors: Array<{ x: number; y: number }> = [];
+        (node.topic_ids || []).forEach((tid) => {
+          if (topicAnchorMap.has(tid)) matchedAnchors.push(topicAnchorMap.get(tid)!);
+        });
+
+        if (matchedAnchors.length > 0) {
+          ax = matchedAnchors.reduce((acc, a) => acc + a.x, 0) / matchedAnchors.length;
+          ay = matchedAnchors.reduce((acc, a) => acc + a.y, 0) / matchedAnchors.length;
+          const offsetAngle = (idx * 1.37) % (2 * Math.PI);
+          const offsetDist = 90 + ((idx * 23) % 110);
+          ax += Math.cos(offsetAngle) * offsetDist;
+          ay += Math.sin(offsetAngle) * offsetDist;
+        } else {
+          const angle = (idx * 0.78) % (2 * Math.PI);
+          const r = 70 + ((idx * 17) % 140);
+          ax = Math.cos(angle) * r;
+          ay = Math.sin(angle) * r;
+        }
+      }
+
+      const existing = simMap.get(node.id);
+      const approxWidth = isTopic
+        ? node.canonical_name.length * 8 + 48
+        : node.canonical_name.length * 7.5 + 38;
+      const approxHeight = isTopic ? 38 : 32;
+
+      if (!existing) {
+        simMap.set(node.id, {
+          x: ax + (Math.random() - 0.5) * 20,
+          y: ay + (Math.random() - 0.5) * 20,
+          vx: 0,
+          vy: 0,
+          anchorX: ax,
+          anchorY: ay,
+          width: approxWidth,
+          height: approxHeight,
+          isTopic,
+        });
+      } else {
+        existing.anchorX = ax;
+        existing.anchorY = ay;
+        existing.width = approxWidth;
+        existing.height = approxHeight;
+        existing.isTopic = isTopic;
+      }
+    });
+
+    Array.from(simMap.keys()).forEach((id) => {
+      if (!activeNodeIds.has(id)) simMap.delete(id);
+    });
+  }, [activeNodes, activeNodeIds]);
 
   // Main Canvas Render Loop
   useEffect(() => {
@@ -112,193 +209,363 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
     let animationFrameId: number;
 
     const render = () => {
-      const width = canvas.clientWidth;
-      const height = canvas.clientHeight;
+      const { width, height } = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
 
-      if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
+      if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
       }
 
+      ctx.save();
+      ctx.scale(dpr, dpr);
       ctx.clearRect(0, 0, width, height);
 
-      // Save canvas state
-      ctx.save();
+      // Dot grid background
+      ctx.strokeStyle = '#EEF0F4';
+      ctx.lineWidth = 1;
+      const gridSize = 42 * zoom;
+      const startX = ((pan.x % gridSize) + gridSize) % gridSize;
+      const startY = ((pan.y % gridSize) + gridSize) % gridSize;
 
-      // Pan & Zoom
+      ctx.beginPath();
+      for (let x = startX; x < width; x += gridSize) {
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+      }
+      for (let y = startY; y < height; y += gridSize) {
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+      }
+      ctx.stroke();
+
+      // Transform
       ctx.translate(width / 2 + pan.x, height / 2 + pan.y);
       ctx.scale(zoom, zoom);
 
-      const positions = nodePositionsRef.current;
+      const simMap = nodeSimMapRef.current;
+      const simNodes = activeNodes
+        .map((n) => ({ node: n, sim: simMap.get(n.id) }))
+        .filter((item): item is { node: NodeModel; sim: NodeSimState } => item.sim !== undefined);
+
+      // Force relaxation step
+      simNodes.forEach(({ sim, node }) => {
+        if (node.id === draggedNodeId) return;
+        const pullStrength = sim.isTopic ? 0.045 : 0.03;
+        sim.vx += (sim.anchorX - sim.x) * pullStrength;
+        sim.vy += (sim.anchorY - sim.y) * pullStrength;
+      });
+
+      activeEdges.forEach((edge) => {
+        const s = simMap.get(edge.source);
+        const t = simMap.get(edge.target);
+        if (!s || !t) return;
+
+        const dx = t.x - s.x;
+        const dy = t.y - s.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const targetDist = s.isTopic || t.isTopic ? 140 : 110;
+        const force = (dist - targetDist) * 0.025;
+
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+
+        if (edge.source !== draggedNodeId) {
+          s.vx += fx;
+          s.vy += fy;
+        }
+        if (edge.target !== draggedNodeId) {
+          t.vx -= fx;
+          t.vy -= fy;
+        }
+      });
+
+      // Anti-Collision Pill-Box Repulsion
+      for (let i = 0; i < simNodes.length; i++) {
+        for (let j = i + 1; j < simNodes.length; j++) {
+          const a = simNodes[i].sim;
+          const b = simNodes[j].sim;
+
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const minDistX = (a.width + b.width) / 2 + 18;
+          const minDistY = (a.height + b.height) / 2 + 14;
+
+          if (Math.abs(dx) < minDistX && Math.abs(dy) < minDistY) {
+            const overlapX = minDistX - Math.abs(dx);
+            const overlapY = minDistY - Math.abs(dy);
+            const signX = dx >= 0 ? 1 : -1;
+            const signY = dy >= 0 ? 1 : -1;
+
+            const pushFactor = 0.15;
+            if (simNodes[i].node.id !== draggedNodeId) {
+              a.vx -= signX * overlapX * pushFactor;
+              a.vy -= signY * overlapY * pushFactor;
+            }
+            if (simNodes[j].node.id !== draggedNodeId) {
+              b.vx += signX * overlapX * pushFactor;
+              b.vy += signY * overlapY * pushFactor;
+            }
+          }
+        }
+      }
+
+      // Velocity integration
+      simNodes.forEach(({ sim, node }) => {
+        if (node.id === draggedNodeId) {
+          sim.vx = 0;
+          sim.vy = 0;
+          return;
+        }
+        sim.vx *= 0.82;
+        sim.vy *= 0.82;
+        sim.x += sim.vx;
+        sim.y += sim.vy;
+      });
 
       // Draw Edges
-      edges.forEach((edge) => {
-        const sourcePos = positions.get(edge.source);
-        const targetPos = positions.get(edge.target);
-        if (!sourcePos || !targetPos) return;
+      activeEdges.forEach((edge) => {
+        const s = simMap.get(edge.source);
+        const t = simMap.get(edge.target);
+        if (!s || !t) return;
 
-        const isHighlighted =
-          selectedNode &&
-          (edge.source === selectedNode.id || edge.target === selectedNode.id);
+        const isHighlighted = selectedNode && (edge.source === selectedNode.id || edge.target === selectedNode.id);
+        const dx = t.x - s.x;
+        const dy = t.y - s.y;
+        const angle = Math.atan2(dy, dx);
+        const targetRadius = (t.width / 2) * 0.85;
+        const endX = t.x - Math.cos(angle) * targetRadius;
+        const endY = t.y - Math.sin(angle) * targetRadius;
 
+        ctx.save();
         ctx.beginPath();
-        ctx.moveTo(sourcePos.x, sourcePos.y);
-        ctx.lineTo(targetPos.x, targetPos.y);
-        ctx.strokeStyle = isHighlighted ? '#18181B' : '#E2E2E8';
-        ctx.lineWidth = isHighlighted ? 2 : 1.2;
+        ctx.moveTo(s.x, s.y);
+        ctx.lineTo(endX, endY);
+        ctx.strokeStyle = isHighlighted ? '#10B981' : edge.relationship_type === 'BELONGS_TO_TOPIC' ? '#DDD6FE' : '#E2E8F0';
+        ctx.lineWidth = isHighlighted ? 2.5 : 1.3;
         ctx.stroke();
 
-        // Subtle link connector dot
+        // Arrow head
+        const arrowLength = 7;
         ctx.beginPath();
-        ctx.arc((sourcePos.x + targetPos.x) / 2, (sourcePos.y + targetPos.y) / 2, 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = isHighlighted ? '#18181B' : '#D1D1D8';
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(
+          endX - arrowLength * Math.cos(angle - Math.PI / 6),
+          endY - arrowLength * Math.sin(angle - Math.PI / 6)
+        );
+        ctx.lineTo(
+          endX - arrowLength * Math.cos(angle + Math.PI / 6),
+          endY - arrowLength * Math.sin(angle + Math.PI / 6)
+        );
+        ctx.closePath();
+        ctx.fillStyle = isHighlighted ? '#10B981' : '#CBD5E1';
         ctx.fill();
+
+        // Edge badge
+        if ((isHighlighted || zoom > 0.8) && edge.relationship_type) {
+          const midX = (s.x + endX) / 2;
+          const midY = (s.y + endY) / 2;
+          const badgeText = edge.relationship_type.replace(/_/g, ' ');
+
+          ctx.font = 'bold 8.5px ui-monospace, SFMono-Regular, monospace';
+          const tw = ctx.measureText(badgeText).width;
+          const bw = tw + 10;
+          const bh = 15;
+
+          ctx.fillStyle = isHighlighted ? '#ECFDF5' : '#FFFFFF';
+          ctx.strokeStyle = isHighlighted ? '#10B981' : '#E2E8F0';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(midX - bw / 2, midY - bh / 2, bw, bh, 4);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = isHighlighted ? '#047857' : '#64748B';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(badgeText, midX, midY);
+        }
+
+        ctx.restore();
       });
 
       // Draw Nodes
-      nodes.forEach((node) => {
-        const pos = positions.get(node.id);
-        if (!pos) return;
-
-        const isSelected = selectedNode?.id === node.id;
+      simNodes.forEach(({ node, sim }) => {
         const isHovered = hoveredNodeId === node.id;
-        const isPrimary = node.canonical_name === 'Transformer';
+        const isSelected = selectedNode?.id === node.id;
+        const isTopic = node.entity_type === 'Topic';
 
-        const label = node.canonical_name;
-        ctx.font = isPrimary
-          ? '600 13px "Plus Jakarta Sans", sans-serif'
-          : '500 12px "Plus Jakarta Sans", sans-serif';
+        const rx = sim.x - sim.width / 2;
+        const ry = sim.y - sim.height / 2;
 
-        const textMetrics = ctx.measureText(label);
-        const paddingX = 14;
-        const paddingY = 8;
-        const pillWidth = textMetrics.width + paddingX * 2 + (isPrimary ? 8 : 16);
-        const pillHeight = 32;
+        ctx.save();
 
-        const rx = pos.x - pillWidth / 2;
-        const ry = pos.y - pillHeight / 2;
-
-        // Draw pill container
-        ctx.beginPath();
-        ctx.roundRect(rx, ry, pillWidth, pillHeight, 16);
-
-        if (isPrimary || isSelected) {
-          ctx.fillStyle = '#0F0F11';
-          ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
-          ctx.shadowBlur = 10;
-          ctx.shadowOffsetY = 3;
+        if (isSelected) {
+          ctx.beginPath();
+          ctx.roundRect(rx - 4, ry - 4, sim.width + 8, sim.height + 8, sim.height / 2 + 4);
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.15)';
           ctx.fill();
-          ctx.shadowBlur = 0;
-          ctx.shadowOffsetY = 0;
+        }
 
-          ctx.fillStyle = '#FFFFFF';
-        } else {
-          ctx.fillStyle = isHovered ? '#FFFFFF' : '#FFFFFF';
-          ctx.shadowColor = 'rgba(0, 0, 0, 0.05)';
-          ctx.shadowBlur = 4;
+        ctx.beginPath();
+        ctx.roundRect(rx, ry, sim.width, sim.height, sim.height / 2);
+
+        if (isTopic) {
+          const grad = ctx.createLinearGradient(rx, ry, rx + sim.width, ry);
+          grad.addColorStop(0, '#7C3AED');
+          grad.addColorStop(1, '#6D28D9');
+          ctx.fillStyle = grad;
+          ctx.shadowColor = 'rgba(124, 58, 237, 0.35)';
+          ctx.shadowBlur = 8;
           ctx.shadowOffsetY = 2;
           ctx.fill();
           ctx.shadowBlur = 0;
           ctx.shadowOffsetY = 0;
 
-          ctx.strokeStyle = isHovered ? '#0F0F11' : '#E4E4E7';
-          ctx.lineWidth = 1.2;
+          ctx.strokeStyle = '#5B21B6';
+          ctx.lineWidth = 1.5;
           ctx.stroke();
 
-          ctx.fillStyle = '#18181B';
-        }
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = 'bold 12px "Plus Jakarta Sans", sans-serif';
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'left';
+          ctx.fillText(`✦ ${node.canonical_name}`, rx + 14, sim.y);
+        } else {
+          let borderColor = '#E2E8F0';
+          let iconChar = '●';
 
-        // Draw tiny icon indicator for non-primary nodes
-        if (!isPrimary) {
-          ctx.beginPath();
-          ctx.arc(rx + 14, pos.y, 3, 0, Math.PI * 2);
-          ctx.fillStyle = node.entity_type === 'Topic' ? '#6366F1' : '#A1A1AA';
+          if (node.entity_type === 'Person') {
+            borderColor = isHovered ? '#059669' : '#10B981';
+            iconChar = '👤';
+          } else if (node.entity_type === 'Organization') {
+            borderColor = isHovered ? '#D97706' : '#F59E0B';
+            iconChar = '🏛️';
+          } else if (node.entity_type === 'MedicalCondition' || node.entity_type === 'Concept') {
+            borderColor = isHovered ? '#0284C7' : '#38BDF8';
+            iconChar = '💡';
+          }
+
+          ctx.fillStyle = '#FFFFFF';
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.05)';
+          ctx.shadowBlur = 5;
+          ctx.shadowOffsetY = 2;
           ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetY = 0;
+
+          ctx.strokeStyle = isSelected ? '#0F172A' : isHovered ? '#1E293B' : borderColor;
+          ctx.lineWidth = isSelected ? 2.2 : isHovered ? 1.8 : 1.2;
+          ctx.stroke();
+
+          ctx.font = '10px sans-serif';
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'left';
+          ctx.fillText(iconChar, rx + 10, sim.y);
+
+          ctx.fillStyle = '#0F172A';
+          ctx.font = '500 11.5px "Plus Jakarta Sans", sans-serif';
+          ctx.fillText(node.canonical_name, rx + 26, sim.y);
         }
 
-        // Text
-        ctx.fillStyle = isPrimary || isSelected ? '#FFFFFF' : '#18181B';
-        ctx.textBaseline = 'middle';
-        const textX = isPrimary ? rx + pillWidth / 2 - textMetrics.width / 2 : rx + 24;
-        ctx.fillText(label, textX, pos.y);
+        ctx.restore();
       });
 
       ctx.restore();
-
       animationFrameId = requestAnimationFrame(render);
     };
 
     render();
-
     return () => cancelAnimationFrame(animationFrameId);
-  }, [nodes, edges, selectedNode, hoveredNodeId, zoom, pan]);
+  }, [activeNodes, activeEdges, zoom, pan, hoveredNodeId, draggedNodeId, selectedNode]);
 
-  // Canvas Mouse & Interaction handlers
+  // Mouse Handlers
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    setIsDragging(true);
-    setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left - rect.width / 2 - pan.x;
+    const mouseY = e.clientY - rect.top - rect.height / 2 - pan.y;
+
+    const simMap = nodeSimMapRef.current;
+    let clickedNodeId: string | null = null;
+
+    activeNodes.forEach((n) => {
+      const sim = simMap.get(n.id);
+      if (sim) {
+        const dx = Math.abs(mouseX / zoom - sim.x);
+        const dy = Math.abs(mouseY / zoom - sim.y);
+        if (dx <= sim.width / 2 && dy <= sim.height / 2) {
+          clickedNodeId = n.id;
+        }
+      }
+    });
+
+    if (clickedNodeId) {
+      setDraggedNodeId(clickedNodeId);
+      const clicked = activeNodes.find((n) => n.id === clickedNodeId);
+      if (clicked) handleSelectNode(clicked);
+    } else {
+      setIsDraggingCanvas(true);
+      setDragCanvasStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+    }
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    if (isDragging) {
+    if (draggedNodeId) {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left - rect.width / 2 - pan.x;
+      const mouseY = e.clientY - rect.top - rect.height / 2 - pan.y;
+      const sim = nodeSimMapRef.current.get(draggedNodeId);
+      if (sim) {
+        sim.x = mouseX / zoom;
+        sim.y = mouseY / zoom;
+        sim.vx = 0;
+        sim.vy = 0;
+      }
+      return;
+    }
+
+    if (isDraggingCanvas) {
       setPan({
-        x: e.clientX - dragStart.x,
-        y: e.clientY - dragStart.y,
+        x: e.clientX - dragCanvasStart.x,
+        y: e.clientY - dragCanvasStart.y,
       });
       return;
     }
 
-    // Check node hover
     const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left - canvas.clientWidth / 2 - pan.x;
-    const mouseY = e.clientY - rect.top - canvas.clientHeight / 2 - pan.y;
+    const mouseX = e.clientX - rect.left - rect.width / 2 - pan.x;
+    const mouseY = e.clientY - rect.top - rect.height / 2 - pan.y;
 
-    const scaledX = mouseX / zoom;
-    const scaledY = mouseY / zoom;
+    const simMap = nodeSimMapRef.current;
+    let foundHover: string | null = null;
 
-    const positions = nodePositionsRef.current;
-    let foundNodeId: string | null = null;
-
-    for (const [id, pos] of positions.entries()) {
-      const dist = Math.hypot(scaledX - pos.x, scaledY - pos.y);
-      if (dist < 40) {
-        foundNodeId = id;
-        break;
+    activeNodes.forEach((n) => {
+      const sim = simMap.get(n.id);
+      if (sim) {
+        const dx = Math.abs(mouseX / zoom - sim.x);
+        const dy = Math.abs(mouseY / zoom - sim.y);
+        if (dx <= sim.width / 2 && dy <= sim.height / 2) {
+          foundHover = n.id;
+        }
       }
-    }
+    });
 
-    setHoveredNodeId(foundNodeId);
-    canvas.style.cursor = foundNodeId ? 'pointer' : isDragging ? 'grabbing' : 'grab';
+    setHoveredNodeId(foundHover);
   };
 
-  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDragging) return;
-    setIsDragging(false);
-
-    // If mouse didn't drag much, treat as click
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = (e.clientX - rect.left - canvas.clientWidth / 2 - pan.x) / zoom;
-    const mouseY = (e.clientY - rect.top - canvas.clientHeight / 2 - pan.y) / zoom;
-
-    const positions = nodePositionsRef.current;
-    for (const [id, pos] of positions.entries()) {
-      const dist = Math.hypot(mouseX - pos.x, mouseY - pos.y);
-      if (dist < 40) {
-        const clicked = nodes.find((n) => n.id === id);
-        if (clicked) handleSelectNode(clicked);
-        break;
-      }
-    }
+  const handleMouseUp = () => {
+    setIsDraggingCanvas(false);
+    setDraggedNodeId(null);
   };
 
   const resetView = () => {
-    setZoom(1);
+    setZoom(0.85);
     setPan({ x: 0, y: 0 });
   };
 
@@ -308,33 +575,31 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shrink-0">
         <div>
           <span className="text-[11px] font-bold tracking-widest text-neutral-400 uppercase font-mono">
-            KNOWLEDGE GRAPH
+            TOPIC-AUGMENTED KNOWLEDGE GRAPH
           </span>
           <h1 className="text-3xl font-black text-neutral-900 tracking-tight mt-1">
             Explore Connections
           </h1>
           <p className="text-sm text-neutral-500 mt-1">
-            Visualize how concepts, topics and documents are connected.
+            Interactive, clustered node-link knowledge graph mapping entity relationships and topic communities.
           </p>
         </div>
 
         {/* Filter & Search Bar */}
         <div className="flex items-center gap-3 w-full sm:w-auto">
-          {/* Search nodes */}
           <div className="relative w-full sm:w-64">
             <Search size={15} className="absolute left-3.5 top-3 text-neutral-400" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search nodes..."
+              placeholder="Search entities or topics..."
               className="w-full pl-9 pr-4 py-2 rounded-xl bg-white border border-neutral-200 text-xs text-neutral-800 placeholder-neutral-400 outline-none focus:border-neutral-900 transition-colors"
             />
           </div>
 
-          {/* Type Filter Pills */}
           <div className="flex items-center gap-1.5 bg-neutral-100 p-1 rounded-xl">
-            {['All', 'Entity', 'Topic', 'Document'].map((type) => (
+            {['All', 'Topic', 'Person', 'Concept', 'Organization'].map((type) => (
               <button
                 key={type}
                 onClick={() => setFilterType(type)}
@@ -348,12 +613,39 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
               </button>
             ))}
           </div>
+
+          {/* Density Limit */}
+          <div className="flex items-center bg-neutral-100 rounded-xl p-1 text-xs font-mono">
+            <button
+              onClick={() => setDensityLimit('core')}
+              className={`px-2.5 py-1 rounded-lg ${
+                densityLimit === 'core' ? 'bg-white font-bold text-neutral-900 shadow-2xs' : 'text-neutral-500'
+              }`}
+            >
+              Core (15)
+            </button>
+            <button
+              onClick={() => setDensityLimit('standard')}
+              className={`px-2.5 py-1 rounded-lg ${
+                densityLimit === 'standard' ? 'bg-white font-bold text-neutral-900 shadow-2xs' : 'text-neutral-500'
+              }`}
+            >
+              Standard (35)
+            </button>
+            <button
+              onClick={() => setDensityLimit('all')}
+              className={`px-2.5 py-1 rounded-lg ${
+                densityLimit === 'all' ? 'bg-white font-bold text-neutral-900 shadow-2xs' : 'text-neutral-500'
+              }`}
+            >
+              All
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Main Interactive Canvas Area */}
       <div className="relative flex-1 bg-white rounded-3xl border border-[#EBEBEF] shadow-2xs overflow-hidden flex">
-        {/* Canvas */}
         <canvas
           ref={canvasRef}
           onMouseDown={handleMouseDown}
@@ -362,7 +654,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
           className="w-full h-full block select-none cursor-grab active:cursor-grabbing"
         />
 
-        {/* Floating Zoom Controls (Left) */}
+        {/* Floating Zoom Controls */}
         <div className="absolute left-6 top-6 flex flex-col gap-2 z-10">
           <button
             onClick={() => setZoom((z) => Math.min(z + 0.15, 2.5))}
@@ -372,7 +664,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
             <Plus size={16} />
           </button>
           <button
-            onClick={() => setZoom((z) => Math.max(z - 0.15, 0.4))}
+            onClick={() => setZoom((z) => Math.max(z - 0.15, 0.35))}
             className="w-9 h-9 rounded-xl bg-white border border-neutral-200 text-neutral-700 hover:text-neutral-950 flex items-center justify-center shadow-xs hover:bg-neutral-50 transition-colors"
             title="Zoom Out"
           >
@@ -387,28 +679,10 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
           </button>
         </div>
 
-        {/* Minimap Card (Top Right) */}
-        <div className="hidden md:flex absolute right-6 top-6 w-36 h-28 bg-white/90 backdrop-blur-xs rounded-2xl border border-neutral-200 p-2 flex-col justify-between shadow-xs pointer-events-none">
-          <div className="flex items-center justify-between text-[10px] text-neutral-400 font-mono">
-            <span>RADAR</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-          </div>
-          {/* Mini schematic */}
-          <div className="flex items-center justify-center">
-            <div className="w-12 h-12 rounded-full border border-dashed border-neutral-300 flex items-center justify-center">
-              <div className="w-3 h-3 rounded-full bg-neutral-900" />
-            </div>
-          </div>
-          <span className="text-[9px] text-neutral-400 text-center font-mono">
-            {nodes.length} nodes
-          </span>
-        </div>
-
-        {/* Node Detail Drawer / Flyout (Right side) */}
+        {/* Node Detail Drawer */}
         {selectedNode && (
           <div className="absolute right-0 top-0 bottom-0 w-80 md:w-96 bg-white border-l border-[#EBEBEF] p-6 shadow-xl flex flex-col justify-between overflow-y-auto z-20 animate-in slide-in-from-right-4 duration-200">
             <div>
-              {/* Header */}
               <div className="flex items-start justify-between">
                 <div>
                   <h3 className="text-xl font-bold text-neutral-900 leading-tight">
@@ -426,47 +700,31 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
                 </button>
               </div>
 
-              {/* Description */}
               <p className="text-xs text-neutral-600 leading-relaxed mt-4">
                 {selectedNode.description ||
-                  'Extracted concept entity with grounded cross-document relationship bindings.'}
+                  'Extracted entity node anchored to thematic communities.'}
               </p>
 
-              {/* Related Topics list */}
-              <div className="mt-6">
-                <h4 className="text-xs font-bold text-neutral-900 uppercase tracking-wider font-mono mb-3">
-                  Related Topics
-                </h4>
-                <div className="space-y-2">
-                  {nodeDetail?.associated_topics ? (
-                    nodeDetail.associated_topics.map((t) => (
+              {nodeDetail && nodeDetail.neighbors && nodeDetail.neighbors.length > 0 && (
+                <div className="mt-6">
+                  <h4 className="text-xs font-bold text-neutral-900 uppercase tracking-wider font-mono mb-3">
+                    Connected Relationships ({nodeDetail.neighbors.length})
+                  </h4>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {nodeDetail.neighbors.map((nb, i) => (
                       <div
-                        key={t.id}
-                        className="flex items-center justify-between p-2.5 rounded-xl bg-neutral-50 border border-neutral-100 text-xs"
+                        key={i}
+                        className="flex items-center justify-between p-2 rounded-xl bg-neutral-50 border border-neutral-100 text-xs"
                       >
-                        <span className="font-medium text-neutral-800">{t.name}</span>
-                        <span className="font-mono text-neutral-400">{t.weight || 4}</span>
+                        <span className="font-medium text-neutral-800">{nb.canonical_name}</span>
+                        <span className="text-[10px] font-mono text-neutral-400 uppercase">{nb.entity_type}</span>
                       </div>
-                    ))
-                  ) : (
-                    <div className="text-xs text-neutral-400">Loading connections...</div>
-                  )}
+                    ))}
+                  </div>
                 </div>
-              </div>
-
-              {/* Evidence Chunks */}
-              <div className="mt-6">
-                <h4 className="text-xs font-bold text-neutral-900 uppercase tracking-wider font-mono mb-2">
-                  Source Provenance
-                </h4>
-                <div className="p-3 rounded-xl bg-neutral-50 text-[11px] text-neutral-600 leading-relaxed font-serif italic border border-neutral-100">
-                  "{nodeDetail?.source_chunks[0]?.text ||
-                    'Extracted via hybrid LLM + dependency parsing pipeline.'}"
-                </div>
-              </div>
+              )}
             </div>
 
-            {/* Bottom CTA */}
             <div className="pt-4 border-t border-neutral-100">
               <button
                 onClick={onNavigateToDocuments}

@@ -72,7 +72,12 @@ class TopicService:
 
                     sorted_nodes = sorted(node_objs, key=lambda n: n.degree, reverse=True)
                     top_node = sorted_nodes[0]
-                    community_name = f"{top_node.canonical_name} Community"
+                    cname = top_node.canonical_name
+                    if cname.startswith("ent_") or cname.startswith("top_"):
+                        parts = cname.split("_")
+                        if len(parts) >= 2:
+                            cname = parts[1].replace("-", " ").title()
+                    community_name = f"{cname} Theme"
                     comm_topic_id = generate_topic_id(community_name)
 
                     # Gather representative chunk passages
@@ -115,14 +120,23 @@ class TopicService:
             topic.entity_count = len(topic.entity_ids)
             topic.document_count = len(topic.document_ids)
 
-            # Persist in graph repository
+        # Sort and select top prominent topics (max 15) to keep graph meaningful and uncluttered
+        sorted_topics = sorted(
+            consolidated_topics.values(),
+            key=lambda t: (t.entity_count, len(t.keywords), len(t.representative_passages)),
+            reverse=True,
+        )
+        selected_topics = sorted_topics[:15]
+
+        # Persist selected topics in graph repository
+        for topic in selected_topics:
             self.repo.upsert_topic(topic)
             self.repo.link_topic_to_document(topic.id, document_id)
             for eid in topic.entity_ids:
                 self.repo.link_topic_to_entity(topic.id, eid)
 
-        logger.info(f"Discovered and updated {len(consolidated_topics)} topics for document {document_id}")
-        return list(consolidated_topics.values())
+        logger.info(f"Discovered and updated {len(selected_topics)} topics for document {document_id}")
+        return selected_topics
 
     def get_topics(self, limit: int = 50, offset: int = 0) -> Tuple[List[TopicModel], int]:
         all_topics = list(self.repo.memory_engine.topic_nodes.values())

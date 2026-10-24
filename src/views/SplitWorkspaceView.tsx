@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   UploadCloud,
   FileText,
@@ -19,6 +19,9 @@ import {
   Eye,
   Info,
   X,
+  Compass,
+  MessageSquare,
+  Network,
 } from 'lucide-react';
 import {
   Citation,
@@ -35,6 +38,18 @@ import { chatApi, documentsApi, graphApi } from '../services/api';
 interface SplitWorkspaceViewProps {
   onOpenCitation: (citation: Citation) => void;
   onSelectDocument: (doc: DocumentResponse) => void;
+}
+
+interface NodeSimState {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  anchorX: number;
+  anchorY: number;
+  width: number;
+  height: number;
+  isTopic: boolean;
 }
 
 export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
@@ -59,6 +74,7 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
   >([]);
   const [inputQuery, setInputQuery] = useState('');
   const [isLoadingAnswer, setIsLoadingAnswer] = useState(false);
+  const [availableModels, setAvailableModels] = useState<Array<{ name: string; display_name: string }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>(
     () => localStorage.getItem('nexus_selected_model') || 'qwen3:1.7b'
   );
@@ -67,29 +83,31 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
 
   // Graph state
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [nodes, setNodes] = useState<NodeModel[]>([]);
-  const [edges, setEdges] = useState<EdgeModel[]>([]);
+  const [rawNodes, setRawNodes] = useState<NodeModel[]>([]);
+  const [rawEdges, setRawEdges] = useState<EdgeModel[]>([]);
   const [filterType, setFilterType] = useState<string>('All');
+  const [densityLimit, setDensityLimit] = useState<'core' | 'standard' | 'all'>('standard');
   const [searchGraphQuery, setSearchGraphQuery] = useState('');
   const [selectedNode, setSelectedNode] = useState<NodeModel | null>(null);
   const [nodeDetail, setNodeDetail] = useState<NodeDetailResponse | null>(null);
 
-  // Graph Highlights (Topic cluster, Documents & Relationship paths from Answer)
+  // Graph Highlights
   const [highlightedNodeIds, setHighlightedNodeIds] = useState<Set<string>>(new Set());
   const [highlightedEdgeIds, setHighlightedEdgeIds] = useState<Set<string>>(new Set());
   const [highlightInfo, setHighlightInfo] = useState<{ title: string; count: number } | null>(null);
 
   // Canvas transform & interaction
-  const [zoom, setZoom] = useState(0.9);
+  const [zoom, setZoom] = useState(0.85);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [isDraggingCanvas, setIsDraggingCanvas] = useState(false);
+  const [dragCanvasStart, setDragCanvasStart] = useState({ x: 0, y: 0 });
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
-  const nodePositionsRef = useRef<
-    Map<string, { x: number; y: number; vx: number; vy: number; isCenter?: boolean }>
-  >(new Map());
+  const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
 
-  // 1. Initial Load of Real Data
+  // Physics simulation state ref
+  const nodeSimMapRef = useRef<Map<string, NodeSimState>>(new Map());
+
+  // 1. Initial Load of Real Data & Dynamic Models
   const loadDocuments = async () => {
     try {
       const res = await documentsApi.listDocuments();
@@ -101,17 +119,38 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
 
   const loadGraph = async () => {
     try {
-      const data = await graphApi.getGraph(100, 0, filterType === 'All' ? undefined : filterType);
-      setNodes(data.nodes);
-      setEdges(data.edges);
+      const data = await graphApi.getGraph(150, 0, filterType === 'All' ? undefined : filterType);
+      setRawNodes(data.nodes);
+      setRawEdges(data.edges);
     } catch (err) {
       console.warn('Failed to load graph:', err);
+    }
+  };
+
+  const loadAvailableModels = async () => {
+    try {
+      const res = await fetch('/api/v1/models');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.models && data.models.length > 0) {
+          setAvailableModels(data.models);
+          // Keep active model if exists, else first detected
+          if (!data.models.some((m: any) => m.name === selectedModel)) {
+            const fallback = data.active_model || data.models[0].name;
+            setSelectedModel(fallback);
+            localStorage.setItem('nexus_selected_model', fallback);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to query local models:', err);
     }
   };
 
   useEffect(() => {
     loadDocuments();
     loadGraph();
+    loadAvailableModels();
 
     const handleModelChange = (e: any) => {
       if (e.detail) setSelectedModel(e.detail);
@@ -128,58 +167,138 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoadingAnswer]);
 
-  // 2. Initialize Node Positions (Center on highest-degree node)
+  // Filter and prioritize nodes by density limit
+  const activeNodes = useMemo(() => {
+    let list = [...rawNodes];
+    if (searchGraphQuery.trim()) {
+      const q = searchGraphQuery.toLowerCase();
+      list = list.filter(
+        (n) => n.canonical_name.toLowerCase().includes(q) || n.entity_type.toLowerCase().includes(q)
+      );
+    }
+
+    if (densityLimit === 'core') {
+      // Prioritize topics + top 15 highest degree entities
+      const topics = list.filter((n) => n.entity_type === 'Topic');
+      const nonTopics = list.filter((n) => n.entity_type !== 'Topic').slice(0, 15);
+      return [...topics, ...nonTopics];
+    } else if (densityLimit === 'standard') {
+      const topics = list.filter((n) => n.entity_type === 'Topic');
+      const nonTopics = list.filter((n) => n.entity_type !== 'Topic').slice(0, 35);
+      return [...topics, ...nonTopics];
+    }
+    return list;
+  }, [rawNodes, densityLimit, searchGraphQuery]);
+
+  const activeNodeIds = useMemo(() => new Set(activeNodes.map((n) => n.id)), [activeNodes]);
+
+  const activeEdges = useMemo(() => {
+    return rawEdges.filter((e) => activeNodeIds.has(e.source) && activeNodeIds.has(e.target));
+  }, [rawEdges, activeNodeIds]);
+
+  // Extract list of unique topics for quick-zoom bar
+  const topicList = useMemo(() => {
+    return rawNodes.filter((n) => n.entity_type === 'Topic');
+  }, [rawNodes]);
+
+  // 2. Initialize Physics Positions on Clustered Thematic Centers
   useEffect(() => {
-    if (nodes.length === 0) return;
+    if (activeNodes.length === 0) return;
 
-    const positions = new Map<
-      string,
-      { x: number; y: number; vx: number; vy: number; isCenter?: boolean }
-    >();
+    const simMap = nodeSimMapRef.current;
+    const topicNodes = activeNodes.filter((n) => n.entity_type === 'Topic');
+    const T = topicNodes.length || 1;
+    const clusterRadius = Math.max(280, 180 + T * 35);
 
-    // Pick node with maximum degree as center
-    const sorted = [...nodes].sort((a, b) => (b.degree || 0) - (a.degree || 0));
-    const centerNode = sorted[0];
-
-    positions.set(centerNode.id, { x: 0, y: 0, vx: 0, vy: 0, isCenter: true });
-
-    const otherNodes = sorted.slice(1);
-    const radius = Math.min(320, 120 + otherNodes.length * 6);
-    const angleStep = (2 * Math.PI) / (otherNodes.length || 1);
-
-    otherNodes.forEach((node, idx) => {
-      const angle = idx * angleStep - Math.PI / 2;
-      const r = radius + (idx % 3 === 0 ? 40 : idx % 3 === 1 ? -30 : 0);
-      positions.set(node.id, {
-        x: Math.cos(angle) * r,
-        y: Math.sin(angle) * r,
-        vx: 0,
-        vy: 0,
-      });
+    // Position Topic nodes as radial anchor centers
+    const topicAnchorMap = new Map<string, { x: number; y: number }>();
+    topicNodes.forEach((top, idx) => {
+      const angle = (2 * Math.PI * idx) / T - Math.PI / 2;
+      const ax = Math.cos(angle) * clusterRadius;
+      const ay = Math.sin(angle) * clusterRadius;
+      topicAnchorMap.set(top.id, { x: ax, y: ay });
     });
 
-    nodePositionsRef.current = positions;
-  }, [nodes]);
+    activeNodes.forEach((node, idx) => {
+      const isTopic = node.entity_type === 'Topic';
+      let ax = 0;
+      let ay = 0;
+
+      if (isTopic) {
+        const anchor = topicAnchorMap.get(node.id) || { x: 0, y: 0 };
+        ax = anchor.x;
+        ay = anchor.y;
+      } else {
+        // Find associated topic anchors
+        const matchedAnchors: Array<{ x: number; y: number }> = [];
+        (node.topic_ids || []).forEach((tid) => {
+          if (topicAnchorMap.has(tid)) matchedAnchors.push(topicAnchorMap.get(tid)!);
+        });
+
+        if (matchedAnchors.length > 0) {
+          ax = matchedAnchors.reduce((acc, a) => acc + a.x, 0) / matchedAnchors.length;
+          ay = matchedAnchors.reduce((acc, a) => acc + a.y, 0) / matchedAnchors.length;
+          // Add organic offset around topic anchor
+          const offsetAngle = (idx * 1.37) % (2 * Math.PI);
+          const offsetDist = 90 + ((idx * 23) % 110);
+          ax += Math.cos(offsetAngle) * offsetDist;
+          ay += Math.sin(offsetAngle) * offsetDist;
+        } else {
+          // General entity without direct topic: orbit gently around center
+          const angle = (idx * 0.78) % (2 * Math.PI);
+          const r = 70 + ((idx * 17) % 140);
+          ax = Math.cos(angle) * r;
+          ay = Math.sin(angle) * r;
+        }
+      }
+
+      const existing = simMap.get(node.id);
+      const approxWidth = isTopic
+        ? node.canonical_name.length * 8 + 48
+        : node.canonical_name.length * 7.5 + 38;
+      const approxHeight = isTopic ? 38 : 32;
+
+      if (!existing) {
+        simMap.set(node.id, {
+          x: ax + (Math.random() - 0.5) * 20,
+          y: ay + (Math.random() - 0.5) * 20,
+          vx: 0,
+          vy: 0,
+          anchorX: ax,
+          anchorY: ay,
+          width: approxWidth,
+          height: approxHeight,
+          isTopic,
+        });
+      } else {
+        existing.anchorX = ax;
+        existing.anchorY = ay;
+        existing.width = approxWidth;
+        existing.height = approxHeight;
+        existing.isTopic = isTopic;
+      }
+    });
+
+    // Remove defunct nodes
+    Array.from(simMap.keys()).forEach((id) => {
+      if (!activeNodeIds.has(id)) simMap.delete(id);
+    });
+  }, [activeNodes, activeNodeIds]);
 
   // 3. Highlight Graph from Query Answer
   const highlightAnswerEvidence = (resp: QueryResponse) => {
     const nodeIds = new Set<string>();
     const edgeIds = new Set<string>();
 
-    // Related entities
     if (resp.related_entities) {
       resp.related_entities.forEach((ent) => nodeIds.add(ent.id));
     }
-
-    // Supporting paths
     if (resp.supporting_paths) {
       resp.supporting_paths.forEach((p) => {
         p.nodes?.forEach((n) => nodeIds.add(n.id));
         p.edges?.forEach((e) => edgeIds.add(e.id));
       });
     }
-
-    // Source documents
     if (resp.citations) {
       resp.citations.forEach((c) => nodeIds.add(c.document_id));
     }
@@ -191,30 +310,20 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
       count: nodeIds.size,
     });
 
-    // Auto-focus camera on highlighted nodes
-    if (nodeIds.size > 0 && nodePositionsRef.current.size > 0) {
-      let minX = Infinity,
-        maxX = -Infinity,
-        minY = Infinity,
-        maxY = -Infinity;
-      let foundCount = 0;
-
+    // Focus camera on centroid of highlighted nodes
+    if (nodeIds.size > 0 && nodeSimMapRef.current.size > 0) {
+      let sumX = 0, sumY = 0, count = 0;
       nodeIds.forEach((id) => {
-        const pos = nodePositionsRef.current.get(id);
+        const pos = nodeSimMapRef.current.get(id);
         if (pos) {
-          minX = Math.min(minX, pos.x);
-          maxX = Math.max(maxX, pos.x);
-          minY = Math.min(minY, pos.y);
-          maxY = Math.max(maxY, pos.y);
-          foundCount++;
+          sumX += pos.x;
+          sumY += pos.y;
+          count++;
         }
       });
-
-      if (foundCount > 0) {
-        const centerX = (minX + maxX) / 2;
-        const centerY = (minY + maxY) / 2;
-        setPan({ x: -centerX * 0.9, y: -centerY * 0.9 });
-        setZoom(1.1);
+      if (count > 0) {
+        setPan({ x: -(sumX / count) * 0.9, y: -(sumY / count) * 0.9 });
+        setZoom(1.05);
       }
     }
   };
@@ -223,6 +332,25 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
     setHighlightedNodeIds(new Set());
     setHighlightedEdgeIds(new Set());
     setHighlightInfo(null);
+  };
+
+  const zoomToTopicCluster = (topic: NodeModel) => {
+    const pos = nodeSimMapRef.current.get(topic.id);
+    if (pos) {
+      setPan({ x: -pos.x * zoom, y: -pos.y * zoom });
+      setZoom(1.15);
+      // Highlight topic and its connected entities
+      const linked = new Set<string>([topic.id]);
+      activeEdges.forEach((e) => {
+        if (e.source === topic.id) linked.add(e.target);
+        if (e.target === topic.id) linked.add(e.source);
+      });
+      setHighlightedNodeIds(linked);
+      setHighlightInfo({
+        title: `Cluster: ${topic.canonical_name}`,
+        count: linked.size,
+      });
+    }
   };
 
   // 4. Send Chat Query
@@ -263,8 +391,6 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
       };
 
       setMessages((prev) => [...prev, assistantMsg]);
-
-      // Automatically highlight the evidence paths on the right graph!
       highlightAnswerEvidence(res);
     } catch (err: any) {
       console.error('Chat query error:', err);
@@ -314,7 +440,7 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
     }
   };
 
-  // 6. Canvas Render Loop
+  // 6. Physics Simulation & Canvas Render Loop (60 FPS with Anti-Collision)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -336,10 +462,10 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
       ctx.scale(dpr, dpr);
       ctx.clearRect(0, 0, width, height);
 
-      // Background subtle grid
-      ctx.strokeStyle = '#F0F0F4';
+      // Subtle engineering dot grid background
+      ctx.strokeStyle = '#EEF0F4';
       ctx.lineWidth = 1;
-      const gridSize = 40 * zoom;
+      const gridSize = 42 * zoom;
       const startX = ((pan.x % gridSize) + gridSize) % gridSize;
       const startY = ((pan.y % gridSize) + gridSize) % gridSize;
 
@@ -358,124 +484,309 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
       ctx.translate(width / 2 + pan.x, height / 2 + pan.y);
       ctx.scale(zoom, zoom);
 
-      const positions = nodePositionsRef.current;
+      const simMap = nodeSimMapRef.current;
+      const simNodes = activeNodes
+        .map((n) => ({ node: n, sim: simMap.get(n.id) }))
+        .filter((item): item is { node: NodeModel; sim: NodeSimState } => item.sim !== undefined);
+
+      // ==========================================
+      // FORCE-DIRECTED PHYSICS RELAXATION STEP
+      // ==========================================
+      // A. Pull toward anchor cluster center
+      simNodes.forEach(({ sim, node }) => {
+        if (node.id === draggedNodeId) return;
+        const pullStrength = sim.isTopic ? 0.045 : 0.03;
+        sim.vx += (sim.anchorX - sim.x) * pullStrength;
+        sim.vy += (sim.anchorY - sim.y) * pullStrength;
+      });
+
+      // B. Spring attraction along connected edges
+      activeEdges.forEach((edge) => {
+        const s = simMap.get(edge.source);
+        const t = simMap.get(edge.target);
+        if (!s || !t) return;
+
+        const dx = t.x - s.x;
+        const dy = t.y - s.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const targetDist = s.isTopic || t.isTopic ? 140 : 110;
+        const force = (dist - targetDist) * 0.025;
+
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+
+        if (edge.source !== draggedNodeId) {
+          s.vx += fx;
+          s.vy += fy;
+        }
+        if (edge.target !== draggedNodeId) {
+          t.vx -= fx;
+          t.vy -= fy;
+        }
+      });
+
+      // C. Anti-Collision Pill-Box Repulsion (Guarantees NO Overlapping Labels)
+      for (let i = 0; i < simNodes.length; i++) {
+        for (let j = i + 1; j < simNodes.length; j++) {
+          const a = simNodes[i].sim;
+          const b = simNodes[j].sim;
+
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const minDistX = (a.width + b.width) / 2 + 18;
+          const minDistY = (a.height + b.height) / 2 + 14;
+
+          if (Math.abs(dx) < minDistX && Math.abs(dy) < minDistY) {
+            const overlapX = minDistX - Math.abs(dx);
+            const overlapY = minDistY - Math.abs(dy);
+            const signX = dx >= 0 ? 1 : -1;
+            const signY = dy >= 0 ? 1 : -1;
+
+            const pushFactor = 0.15;
+            if (simNodes[i].node.id !== draggedNodeId) {
+              a.vx -= signX * overlapX * pushFactor;
+              a.vy -= signY * overlapY * pushFactor;
+            }
+            if (simNodes[j].node.id !== draggedNodeId) {
+              b.vx += signX * overlapX * pushFactor;
+              b.vy += signY * overlapY * pushFactor;
+            }
+          } else {
+            // Soft Coulomb repulsion
+            const distSq = dx * dx + dy * dy;
+            if (distSq < 90000 && distSq > 1) {
+              const repel = 140 / distSq;
+              if (simNodes[i].node.id !== draggedNodeId) {
+                a.vx -= dx * repel;
+                a.vy -= dy * repel;
+              }
+              if (simNodes[j].node.id !== draggedNodeId) {
+                b.vx += dx * repel;
+                b.vy += dy * repel;
+              }
+            }
+          }
+        }
+      }
+
+      // D. Velocity integration with smooth friction
+      simNodes.forEach(({ sim, node }) => {
+        if (node.id === draggedNodeId) {
+          sim.vx = 0;
+          sim.vy = 0;
+          return;
+        }
+        sim.vx *= 0.82;
+        sim.vy *= 0.82;
+        sim.x += sim.vx;
+        sim.y += sim.vy;
+      });
+
       const hasHighlights = highlightedNodeIds.size > 0;
 
-      // Draw Edges
-      edges.forEach((edge) => {
-        const sourcePos = positions.get(edge.source);
-        const targetPos = positions.get(edge.target);
-        if (!sourcePos || !targetPos) return;
+      // ==========================================
+      // DRAW EDGES WITH RELATION BADGES & ARROWS
+      // ==========================================
+      activeEdges.forEach((edge) => {
+        const s = simMap.get(edge.source);
+        const t = simMap.get(edge.target);
+        if (!s || !t) return;
 
-        const isHighlightedEdge =
+        const isHighlighted =
           highlightedEdgeIds.has(edge.id) ||
           (highlightedNodeIds.has(edge.source) && highlightedNodeIds.has(edge.target));
 
-        ctx.beginPath();
-        ctx.moveTo(sourcePos.x, sourcePos.y);
-        ctx.lineTo(targetPos.x, targetPos.y);
+        const dx = t.x - s.x;
+        const dy = t.y - s.y;
+        const angle = Math.atan2(dy, dx);
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
 
-        if (isHighlightedEdge) {
-          ctx.strokeStyle = '#10B981'; // Vibrant emerald highlight
-          ctx.lineWidth = 2.8;
-          ctx.setLineDash([4, 2]);
+        // Clip edge line to target pill perimeter
+        const targetRadius = (t.width / 2) * 0.85;
+        const endX = t.x - Math.cos(angle) * targetRadius;
+        const endY = t.y - Math.sin(angle) * targetRadius;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y);
+        ctx.lineTo(endX, endY);
+
+        if (isHighlighted) {
+          ctx.strokeStyle = '#10B981';
+          ctx.lineWidth = 2.6;
+          ctx.setLineDash([5, 3]);
         } else if (hasHighlights) {
-          ctx.strokeStyle = 'rgba(226, 232, 240, 0.4)';
-          ctx.lineWidth = 0.8;
-          ctx.setLineDash([]);
+          ctx.strokeStyle = 'rgba(203, 213, 225, 0.4)';
+          ctx.lineWidth = 1;
+        } else if (edge.relationship_type === 'BELONGS_TO_TOPIC') {
+          ctx.strokeStyle = '#DDD6FE';
+          ctx.lineWidth = 1.2;
         } else {
           ctx.strokeStyle = '#E2E8F0';
-          ctx.lineWidth = 1.2;
-          ctx.setLineDash([]);
+          ctx.lineWidth = 1.4;
         }
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Draw edge relationship label if highlighted or zoom is high
-        if ((isHighlightedEdge || zoom > 1.2) && edge.relationship_type) {
-          const midX = (sourcePos.x + targetPos.x) / 2;
-          const midY = (sourcePos.y + targetPos.y) / 2;
-          ctx.fillStyle = isHighlightedEdge ? '#047857' : '#94A3B8';
-          ctx.font = '9px ui-monospace, SFMono-Regular, monospace';
+        // Arrow head pointing to target
+        const arrowLength = 7;
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(
+          endX - arrowLength * Math.cos(angle - Math.PI / 6),
+          endY - arrowLength * Math.sin(angle - Math.PI / 6)
+        );
+        ctx.lineTo(
+          endX - arrowLength * Math.cos(angle + Math.PI / 6),
+          endY - arrowLength * Math.sin(angle + Math.PI / 6)
+        );
+        ctx.closePath();
+        ctx.fillStyle = isHighlighted ? '#10B981' : '#CBD5E1';
+        ctx.fill();
+
+        // Edge Relationship Badge at midpoint
+        if ((isHighlighted || zoom > 0.8) && edge.relationship_type) {
+          const midX = (s.x + endX) / 2;
+          const midY = (s.y + endY) / 2;
+          const badgeText = edge.relationship_type.replace(/_/g, ' ');
+
+          ctx.font = 'bold 8.5px ui-monospace, SFMono-Regular, monospace';
+          const tw = ctx.measureText(badgeText).width;
+          const bw = tw + 10;
+          const bh = 15;
+
+          ctx.fillStyle = isHighlighted ? '#ECFDF5' : '#FFFFFF';
+          ctx.strokeStyle = isHighlighted ? '#10B981' : '#E2E8F0';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(midX - bw / 2, midY - bh / 2, bw, bh, 4);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = isHighlighted ? '#047857' : '#64748B';
           ctx.textAlign = 'center';
-          ctx.fillText(edge.relationship_type, midX, midY - 3);
+          ctx.textBaseline = 'middle';
+          ctx.fillText(badgeText, midX, midY);
         }
+
+        ctx.restore();
       });
 
-      // Draw Nodes
-      nodes.forEach((node) => {
-        const pos = positions.get(node.id);
-        if (!pos) return;
-
+      // ==========================================
+      // DRAW HIGH-PRECISION CATEGORY PILLS
+      // ==========================================
+      simNodes.forEach(({ node, sim }) => {
         const isHighlighted = highlightedNodeIds.has(node.id);
         const isHovered = hoveredNodeId === node.id;
         const isSelected = selectedNode?.id === node.id;
+        const isTopic = node.entity_type === 'Topic';
 
-        // Base node radius by degree
-        let radius = Math.min(24, Math.max(12, 10 + (node.degree || 1) * 1.5));
-        if (isHighlighted) radius += 4;
-
-        // Dim non-highlighted nodes when highlights are active
+        const rx = sim.x - sim.width / 2;
+        const ry = sim.y - sim.height / 2;
         const opacity = hasHighlights && !isHighlighted ? 0.25 : 1.0;
 
         ctx.save();
         ctx.globalAlpha = opacity;
 
-        // Outer Glow for highlighted nodes
-        if (isHighlighted) {
+        // Outer Glow for highlighted or selected node
+        if (isHighlighted || isSelected) {
           ctx.beginPath();
-          ctx.arc(pos.x, pos.y, radius + 7, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(16, 185, 129, 0.25)';
+          ctx.roundRect(rx - 4, ry - 4, sim.width + 8, sim.height + 8, sim.height / 2 + 4);
+          ctx.fillStyle = isHighlighted ? 'rgba(16, 185, 129, 0.25)' : 'rgba(15, 23, 42, 0.15)';
           ctx.fill();
-
-          ctx.beginPath();
-          ctx.arc(pos.x, pos.y, radius + 3, 0, Math.PI * 2);
-          ctx.strokeStyle = '#10B981';
-          ctx.lineWidth = 2;
-          ctx.stroke();
         }
 
-        // Selection ring
-        if (isSelected) {
-          ctx.beginPath();
-          ctx.arc(pos.x, pos.y, radius + 5, 0, Math.PI * 2);
-          ctx.strokeStyle = '#0F172A';
-          ctx.lineWidth = 2;
-          ctx.stroke();
-        }
-
-        // Node Body
+        // Pill Container
         ctx.beginPath();
-        ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+        ctx.roundRect(rx, ry, sim.width, sim.height, sim.height / 2);
 
-        if (isHighlighted) {
-          ctx.fillStyle = '#0F172A';
-        } else if (node.entity_type === 'Topic') {
-          ctx.fillStyle = '#8B5CF6'; // Violet for topics
-        } else if (node.entity_type === 'Document') {
-          ctx.fillStyle = '#3B82F6'; // Blue for documents
+        if (isTopic) {
+          // Vibrant Purple Gradient for Topic Community Hubs
+          const grad = ctx.createLinearGradient(rx, ry, rx + sim.width, ry);
+          grad.addColorStop(0, '#7C3AED');
+          grad.addColorStop(1, '#6D28D9');
+          ctx.fillStyle = grad;
+          ctx.shadowColor = 'rgba(124, 58, 237, 0.35)';
+          ctx.shadowBlur = 8;
+          ctx.shadowOffsetY = 2;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetY = 0;
+
+          // Border
+          ctx.strokeStyle = '#5B21B6';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // Text & Icon
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = 'bold 12px "Plus Jakarta Sans", sans-serif';
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'left';
+          ctx.fillText(`✦ ${node.canonical_name}`, rx + 14, sim.y);
         } else {
-          ctx.fillStyle = '#1E293B'; // Dark Slate for entities
+          // Entity Pill (Color-Coded by Category)
+          let borderColor = '#E2E8F0';
+          let iconChar = '●';
+          let iconColor = '#94A3B8';
+
+          if (node.entity_type === 'Person') {
+            borderColor = isHovered ? '#059669' : '#10B981';
+            iconChar = '👤';
+            iconColor = '#059669';
+          } else if (node.entity_type === 'Organization') {
+            borderColor = isHovered ? '#D97706' : '#F59E0B';
+            iconChar = '🏛️';
+            iconColor = '#D97706';
+          } else if (node.entity_type === 'MedicalCondition' || node.entity_type === 'Concept') {
+            borderColor = isHovered ? '#0284C7' : '#38BDF8';
+            iconChar = '💡';
+            iconColor = '#0284C7';
+          } else if (node.entity_type === 'Document') {
+            borderColor = isHovered ? '#4F46E5' : '#6366F1';
+            iconChar = '📄';
+            iconColor = '#4F46E5';
+          }
+
+          ctx.fillStyle = '#FFFFFF';
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.05)';
+          ctx.shadowBlur = 5;
+          ctx.shadowOffsetY = 2;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetY = 0;
+
+          ctx.strokeStyle = isSelected ? '#0F172A' : isHovered ? '#1E293B' : borderColor;
+          ctx.lineWidth = isSelected ? 2.2 : isHovered ? 1.8 : 1.2;
+          ctx.stroke();
+
+          // Icon dot / emoji
+          ctx.font = '10px sans-serif';
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'left';
+          ctx.fillText(iconChar, rx + 10, sim.y);
+
+          // Entity Label
+          ctx.fillStyle = '#0F172A';
+          ctx.font = '500 11.5px "Plus Jakarta Sans", sans-serif';
+          ctx.fillText(node.canonical_name, rx + 26, sim.y);
         }
-        ctx.fill();
 
-        // Node Label
-        ctx.fillStyle = isHighlighted ? '#0F172A' : '#334155';
-        ctx.font = isHighlighted
-          ? 'bold 12px sans-serif'
-          : '11px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
+        // Degree counter badge
+        if (node.degree > 1 && !isTopic) {
+          ctx.beginPath();
+          ctx.arc(rx + sim.width - 9, sim.y, 6, 0, Math.PI * 2);
+          ctx.fillStyle = '#F1F5F9';
+          ctx.fill();
+          ctx.strokeStyle = '#CBD5E1';
+          ctx.lineWidth = 1;
+          ctx.stroke();
 
-        const label = node.canonical_name;
-        const truncated = label.length > 20 ? label.slice(0, 18) + '...' : label;
-        ctx.fillText(truncated, pos.x, pos.y + radius + 4);
-
-        // Subtitle badge for highlighted nodes
-        if (isHighlighted) {
-          ctx.fillStyle = '#10B981';
-          ctx.font = 'bold 9px ui-monospace, monospace';
-          ctx.fillText('● EVIDENCE', pos.x, pos.y + radius + 18);
+          ctx.fillStyle = '#64748B';
+          ctx.font = 'bold 8px ui-monospace, monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(String(node.degree), rx + sim.width - 9, sim.y);
         }
 
         ctx.restore();
@@ -487,22 +798,63 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
 
     render();
     return () => cancelAnimationFrame(animationFrameId);
-  }, [nodes, edges, highlightedNodeIds, highlightedEdgeIds, zoom, pan, hoveredNodeId, selectedNode]);
+  }, [activeNodes, activeEdges, highlightedNodeIds, highlightedEdgeIds, zoom, pan, hoveredNodeId, draggedNodeId, selectedNode]);
 
-  // Canvas Mouse Interactions
+  // Canvas Mouse & Interaction Handlers
   const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    setIsDragging(true);
-    setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left - rect.width / 2 - pan.x;
+    const mouseY = e.clientY - rect.top - rect.height / 2 - pan.y;
+
+    const simMap = nodeSimMapRef.current;
+    let clickedNodeId: string | null = null;
+
+    activeNodes.forEach((n) => {
+      const sim = simMap.get(n.id);
+      if (sim) {
+        const dx = Math.abs(mouseX / zoom - sim.x);
+        const dy = Math.abs(mouseY / zoom - sim.y);
+        if (dx <= sim.width / 2 && dy <= sim.height / 2) {
+          clickedNodeId = n.id;
+        }
+      }
+    });
+
+    if (clickedNodeId) {
+      setDraggedNodeId(clickedNodeId);
+      const clicked = activeNodes.find((n) => n.id === clickedNodeId);
+      if (clicked) handleSelectNode(clicked);
+    } else {
+      setIsDraggingCanvas(true);
+      setDragCanvasStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+    }
   };
 
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    if (isDragging) {
+    if (draggedNodeId) {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left - rect.width / 2 - pan.x;
+      const mouseY = e.clientY - rect.top - rect.height / 2 - pan.y;
+      const sim = nodeSimMapRef.current.get(draggedNodeId);
+      if (sim) {
+        sim.x = mouseX / zoom;
+        sim.y = mouseY / zoom;
+        sim.vx = 0;
+        sim.vy = 0;
+      }
+      return;
+    }
+
+    if (isDraggingCanvas) {
       setPan({
-        x: e.clientX - dragStart.x,
-        y: e.clientY - dragStart.y,
+        x: e.clientX - dragCanvasStart.x,
+        y: e.clientY - dragCanvasStart.y,
       });
       return;
     }
@@ -512,16 +864,17 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
     const mouseX = e.clientX - rect.left - rect.width / 2 - pan.x;
     const mouseY = e.clientY - rect.top - rect.height / 2 - pan.y;
 
-    const positions = nodePositionsRef.current;
+    const simMap = nodeSimMapRef.current;
     let foundHover: string | null = null;
 
-    nodes.forEach((n) => {
-      const pos = positions.get(n.id);
-      if (pos) {
-        const dx = (mouseX - pos.x * zoom) / zoom;
-        const dy = (mouseY - pos.y * zoom) / zoom;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist <= 24) foundHover = n.id;
+    activeNodes.forEach((n) => {
+      const sim = simMap.get(n.id);
+      if (sim) {
+        const dx = Math.abs(mouseX / zoom - sim.x);
+        const dy = Math.abs(mouseY / zoom - sim.y);
+        if (dx <= sim.width / 2 && dy <= sim.height / 2) {
+          foundHover = n.id;
+        }
       }
     });
 
@@ -529,42 +882,14 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
   };
 
   const handleCanvasMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left - rect.width / 2 - pan.x;
-    const mouseY = e.clientY - rect.top - rect.height / 2 - pan.y;
-
-    const positions = nodePositionsRef.current;
-    let clickedNode: NodeModel | null = null;
-
-    nodes.forEach((n) => {
-      const pos = positions.get(n.id);
-      if (pos) {
-        const dx = (mouseX - pos.x * zoom) / zoom;
-        const dy = (mouseY - pos.y * zoom) / zoom;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist <= 24) clickedNode = n;
-      }
-    });
-
-    if (clickedNode) {
-      handleSelectNode(clickedNode);
-    } else {
-      setSelectedNode(null);
-      setNodeDetail(null);
-    }
+    setIsDraggingCanvas(false);
+    setDraggedNodeId(null);
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-    setZoom((prev) => Math.min(2.5, Math.max(0.4, prev * zoomFactor)));
+    setZoom((prev) => Math.min(2.5, Math.max(0.35, prev * zoomFactor)));
   };
 
   const samplePrompts = [
@@ -576,7 +901,7 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
   return (
     <div className="flex h-[calc(100vh-4rem)] w-full overflow-hidden bg-white">
       {/* ======================================================== */}
-      {/* LEFT HALF: DOCUMENT UPLOADER & CHAT BOX                   */}
+      {/* LEFT HALF: DOCUMENT UPLOADER & GROUNDED CHAT             */}
       {/* ======================================================== */}
       <div className="w-1/2 flex flex-col border-r border-[#EBEBEF] h-full overflow-hidden bg-[#FAFAFC]">
         {/* Top: Document Ingestion Section */}
@@ -585,11 +910,11 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-800 font-mono">
-                Document Ingestion Pipeline
+                Knowledge Base Ingestion
               </h2>
             </div>
             <span className="text-[11px] font-mono text-neutral-400">
-              {documents.length} Indexed
+              {documents.length} Document{documents.length !== 1 ? 's' : ''} Indexed
             </span>
           </div>
 
@@ -610,7 +935,7 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
               {isUploading ? (
                 <>
                   <RefreshCw size={14} className="animate-spin text-neutral-900" />
-                  <span>{uploadStatus || 'Processing with Fast NLP...'}</span>
+                  <span>{uploadStatus || 'Ingesting with high-speed NLP...'}</span>
                 </>
               ) : (
                 <>
@@ -623,7 +948,7 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
 
           {/* Document list */}
           {documents.length > 0 && (
-            <div className="mt-3 max-h-28 overflow-y-auto space-y-1.5 pr-1">
+            <div className="mt-3 max-h-24 overflow-y-auto space-y-1.5 pr-1">
               {documents.map((doc) => (
                 <div
                   key={doc.id}
@@ -657,7 +982,7 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
           )}
         </div>
 
-        {/* Middle: Grounded Chat Messages Thread */}
+        {/* Middle: Grounded Chat Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center p-6 text-neutral-400">
@@ -667,7 +992,7 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
               <h3 className="text-sm font-bold text-neutral-800">Ask Your Knowledge Base</h3>
               <p className="text-xs text-neutral-500 max-w-sm mt-1 leading-relaxed">
                 Queries are intelligently routed to answer broad thematic questions or multi-hop factual chains.
-                Evidence paths are visually highlighted on the right.
+                Evidence paths are visually highlighted on the right graph.
               </p>
 
               {/* Sample Prompts */}
@@ -676,7 +1001,7 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
                   <button
                     key={prompt}
                     onClick={() => handleSendMessage(prompt)}
-                    className="text-left text-xs p-2 rounded-xl bg-white hover:bg-neutral-100 border border-neutral-200/80 text-neutral-700 transition-colors"
+                    className="text-left text-xs p-2.5 rounded-xl bg-white hover:bg-neutral-100 border border-neutral-200/80 text-neutral-700 transition-colors shadow-2xs"
                   >
                     "{prompt}"
                   </button>
@@ -695,13 +1020,10 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
                         : 'bg-white border border-neutral-200 text-neutral-800 rounded-tl-xs shadow-2xs'
                     }`}
                   >
-                    {/* Message Text */}
                     <div className="whitespace-pre-wrap">{msg.text}</div>
 
-                    {/* Citations & Evidence Highlights (Assistant) */}
                     {!isUser && msg.response && (
                       <div className="mt-3 pt-3 border-t border-neutral-100 space-y-2">
-                        {/* Highlight Button */}
                         <button
                           onClick={() => highlightAnswerEvidence(msg.response!)}
                           className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-[11px] font-semibold transition-colors"
@@ -710,7 +1032,6 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
                           <span>Highlight Evidence on Graph</span>
                         </button>
 
-                        {/* Citations */}
                         {msg.response.citations.length > 0 && (
                           <div className="flex flex-wrap gap-1.5">
                             {msg.response.citations.map((c) => (
@@ -727,7 +1048,6 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
                           </div>
                         )}
 
-                        {/* Model & Intent Badge */}
                         <div className="flex items-center gap-2 pt-1 text-[10px] font-mono text-neutral-400">
                           {msg.response.model_used && (
                             <span className="flex items-center gap-1 text-emerald-700">
@@ -754,26 +1074,53 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
           <div ref={chatBottomRef} />
         </div>
 
-        {/* Bottom: Chat Input Box */}
+        {/* Bottom: Dynamic Model Selector & Chat Input */}
         <div className="p-3 border-t border-[#EBEBEF] bg-white shrink-0 space-y-2">
-          {/* Controls Bar: Model & Strategy */}
           <div className="flex items-center justify-between text-[11px]">
+            {/* Dynamic Local Model Selector */}
             <div className="flex items-center gap-2">
-              <span className="font-mono text-neutral-400 uppercase text-[10px]">Model:</span>
-              <span className="font-semibold text-neutral-800 bg-neutral-100 px-2 py-0.5 rounded font-mono">
-                {selectedModel}
+              <span className="font-mono text-neutral-400 uppercase text-[10px] flex items-center gap-1">
+                <Cpu size={11} className="text-emerald-600" />
+                Model:
               </span>
+              <select
+                value={selectedModel}
+                onChange={(e) => {
+                  setSelectedModel(e.target.value);
+                  localStorage.setItem('nexus_selected_model', e.target.value);
+                }}
+                className="font-mono text-[11px] font-semibold bg-neutral-100 hover:bg-neutral-200 text-neutral-800 px-2.5 py-1 rounded-lg border border-neutral-200 focus:outline-none cursor-pointer"
+              >
+                {availableModels.length > 0 ? (
+                  availableModels.map((m) => (
+                    <option key={m.name} value={m.name}>
+                      {m.display_name}
+                    </option>
+                  ))
+                ) : (
+                  <option value={selectedModel}>{selectedModel}</option>
+                )}
+              </select>
+              <button
+                onClick={loadAvailableModels}
+                className="p-1 text-neutral-400 hover:text-neutral-700 rounded transition-colors"
+                title="Refresh detected local models"
+              >
+                <RefreshCw size={11} />
+              </button>
             </div>
+
+            {/* Retrieval Strategy Switcher */}
             <div className="flex items-center gap-1">
               <button
                 onClick={() => setSelectedStrategy(selectedStrategy === 'HYBRID' ? 'VECTOR_ONLY' : 'HYBRID')}
-                className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono transition-colors ${
+                className={`px-2.5 py-0.8 rounded text-[10px] font-bold font-mono transition-colors ${
                   selectedStrategy === 'HYBRID'
                     ? 'bg-neutral-900 text-white'
                     : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                 }`}
               >
-                {selectedStrategy === 'HYBRID' ? 'HYBRID (Graph+Vector)' : 'VECTOR ONLY'}
+                {selectedStrategy === 'HYBRID' ? 'HYBRID (Graph + Chroma)' : 'VECTOR ONLY'}
               </button>
             </div>
           </div>
@@ -805,61 +1152,117 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
       </div>
 
       {/* ======================================================== */}
-      {/* RIGHT HALF: INTERACTIVE KNOWLEDGE GRAPH                   */}
+      {/* RIGHT HALF: FORCE-CLUSTERED TOPIC KNOWLEDGE GRAPH       */}
       {/* ======================================================== */}
       <div className="w-1/2 flex flex-col h-full overflow-hidden relative bg-white">
-        {/* Top Floating Controls Bar */}
-        <div className="absolute top-4 left-4 right-4 z-10 flex items-center justify-between pointer-events-none">
-          {/* Left: Active Highlight Badge */}
-          <div className="pointer-events-auto">
-            {highlightInfo ? (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500 text-white text-xs font-medium shadow-md animate-in fade-in">
-                <Sparkles size={13} />
-                <span>{highlightInfo.title} ({highlightInfo.count} nodes)</span>
+        {/* Top Floating Bar: Topics & Density Controls */}
+        <div className="absolute top-3 left-3 right-3 z-10 flex flex-col gap-2 pointer-events-none">
+          <div className="flex items-center justify-between">
+            {/* Active Highlight Badge or Graph Status */}
+            <div className="pointer-events-auto">
+              {highlightInfo ? (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500 text-white text-xs font-medium shadow-md animate-in fade-in">
+                  <Sparkles size={13} />
+                  <span>{highlightInfo.title} ({highlightInfo.count} nodes)</span>
+                  <button
+                    onClick={clearHighlight}
+                    className="p-0.5 hover:bg-emerald-600 rounded transition-colors ml-1"
+                    title="Clear highlight"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/95 backdrop-blur-xs border border-neutral-200 text-neutral-800 text-xs font-semibold shadow-2xs">
+                  <Network size={14} className="text-indigo-600" />
+                  <span>Topic-Augmented Graph</span>
+                  <span className="text-[10px] font-mono text-neutral-400">
+                    ({activeNodes.length} nodes · {activeEdges.length} links)
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Density & Zoom Controls */}
+            <div className="pointer-events-auto flex items-center gap-1.5 bg-white/95 backdrop-blur-xs border border-neutral-200 p-1 rounded-xl shadow-2xs">
+              {/* Density filter */}
+              <div className="flex items-center bg-neutral-100 rounded-lg p-0.5 text-[10px] font-mono mr-1">
                 <button
-                  onClick={clearHighlight}
-                  className="p-0.5 hover:bg-emerald-600 rounded transition-colors ml-1"
-                  title="Clear highlight"
+                  onClick={() => setDensityLimit('core')}
+                  className={`px-2 py-0.5 rounded ${
+                    densityLimit === 'core' ? 'bg-white font-bold text-neutral-900 shadow-2xs' : 'text-neutral-500'
+                  }`}
+                  title="Show Core Top 15 Entities"
                 >
-                  <X size={12} />
+                  Core (15)
+                </button>
+                <button
+                  onClick={() => setDensityLimit('standard')}
+                  className={`px-2 py-0.5 rounded ${
+                    densityLimit === 'standard' ? 'bg-white font-bold text-neutral-900 shadow-2xs' : 'text-neutral-500'
+                  }`}
+                  title="Show Standard Top 35 Entities"
+                >
+                  Standard (35)
+                </button>
+                <button
+                  onClick={() => setDensityLimit('all')}
+                  className={`px-2 py-0.5 rounded ${
+                    densityLimit === 'all' ? 'bg-white font-bold text-neutral-900 shadow-2xs' : 'text-neutral-500'
+                  }`}
+                  title="Show All Entities"
+                >
+                  All
                 </button>
               </div>
-            ) : (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/90 backdrop-blur-xs border border-neutral-200 text-neutral-800 text-xs font-semibold shadow-2xs">
-                <Share2 size={13} className="text-neutral-500" />
-                <span>Knowledge Graph</span>
-                <span className="text-[10px] font-mono text-neutral-400">({nodes.length} nodes)</span>
-              </div>
-            )}
+
+              {/* Zoom Buttons */}
+              <button
+                onClick={() => setZoom((z) => Math.min(2.5, z * 1.15))}
+                className="p-1.5 hover:bg-neutral-100 rounded-lg text-neutral-600"
+                title="Zoom In"
+              >
+                <Plus size={14} />
+              </button>
+              <button
+                onClick={() => setZoom((z) => Math.max(0.35, z * 0.85))}
+                className="p-1.5 hover:bg-neutral-100 rounded-lg text-neutral-600"
+                title="Zoom Out"
+              >
+                <Minus size={14} />
+              </button>
+              <button
+                onClick={() => {
+                  setZoom(0.85);
+                  setPan({ x: 0, y: 0 });
+                }}
+                className="p-1.5 hover:bg-neutral-100 rounded-lg text-neutral-600"
+                title="Reset View"
+              >
+                <Maximize2 size={14} />
+              </button>
+            </div>
           </div>
 
-          {/* Right: Zoom & Filter Controls */}
-          <div className="pointer-events-auto flex items-center gap-1.5 bg-white/90 backdrop-blur-xs border border-neutral-200 p-1 rounded-xl shadow-2xs">
-            <button
-              onClick={() => setZoom((z) => Math.min(2.5, z * 1.15))}
-              className="p-1.5 hover:bg-neutral-100 rounded-lg text-neutral-600"
-              title="Zoom In"
-            >
-              <Plus size={14} />
-            </button>
-            <button
-              onClick={() => setZoom((z) => Math.max(0.4, z * 0.85))}
-              className="p-1.5 hover:bg-neutral-100 rounded-lg text-neutral-600"
-              title="Zoom Out"
-            >
-              <Minus size={14} />
-            </button>
-            <button
-              onClick={() => {
-                setZoom(0.9);
-                setPan({ x: 0, y: 0 });
-              }}
-              className="p-1.5 hover:bg-neutral-100 rounded-lg text-neutral-600"
-              title="Reset View"
-            >
-              <Maximize2 size={14} />
-            </button>
-          </div>
+          {/* Click-to-Zoom Thematic Topic Chips */}
+          {topicList.length > 0 && (
+            <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto py-1 px-1 scrollbar-none">
+              <span className="text-[10px] font-mono font-bold text-purple-700 bg-purple-50 px-2 py-0.8 rounded-lg shrink-0 flex items-center gap-1">
+                <Compass size={11} />
+                THEMES:
+              </span>
+              {topicList.map((top) => (
+                <button
+                  key={top.id}
+                  onClick={() => zoomToTopicCluster(top)}
+                  className="px-2.5 py-0.8 rounded-lg bg-white/95 hover:bg-purple-50 border border-purple-200 text-purple-900 text-[11px] font-semibold whitespace-nowrap shadow-2xs transition-all flex items-center gap-1 cursor-pointer"
+                >
+                  <span>✦</span>
+                  <span>{top.canonical_name}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Canvas Renderer */}
@@ -869,7 +1272,6 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleCanvasMouseMove}
             onMouseUp={handleCanvasMouseUp}
-            onClick={handleCanvasClick}
             onWheel={handleWheel}
             className="w-full h-full cursor-grab active:cursor-grabbing block"
           />
@@ -879,7 +1281,15 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
             <div className="absolute bottom-4 right-4 max-w-sm w-80 bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl border border-neutral-200 p-4 z-20 animate-in fade-in slide-in-from-bottom-2 duration-150">
               <div className="flex items-start justify-between">
                 <div>
-                  <span className="text-[10px] uppercase font-bold font-mono tracking-wider px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-700">
+                  <span
+                    className={`text-[10px] uppercase font-bold font-mono tracking-wider px-2 py-0.5 rounded-full ${
+                      selectedNode.entity_type === 'Topic'
+                        ? 'bg-purple-100 text-purple-800'
+                        : selectedNode.entity_type === 'Person'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-neutral-100 text-neutral-700'
+                    }`}
+                  >
                     {selectedNode.entity_type}
                   </span>
                   <h4 className="text-sm font-bold text-neutral-900 mt-1">
@@ -903,12 +1313,25 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
                 </p>
               )}
 
+              {/* 1-Click "Ask in Chat" Button */}
+              <div className="mt-3 pt-2">
+                <button
+                  onClick={() => {
+                    handleSendMessage(`Tell me about ${selectedNode.canonical_name} and its significance.`);
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-white text-xs font-semibold shadow-2xs transition-colors"
+                >
+                  <MessageSquare size={12} />
+                  <span>Ask AI about {selectedNode.canonical_name}</span>
+                </button>
+              </div>
+
               {nodeDetail && nodeDetail.neighbors && nodeDetail.neighbors.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-neutral-100">
                   <span className="text-[10px] uppercase font-bold font-mono text-neutral-400 block mb-1.5">
                     Connected Relationships ({nodeDetail.neighbors.length})
                   </span>
-                  <div className="max-h-24 overflow-y-auto space-y-1">
+                  <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
                     {nodeDetail.neighbors.map((nb, i) => (
                       <div key={i} className="flex items-center justify-between text-[11px] p-1.5 rounded bg-neutral-50">
                         <span className="text-neutral-500 font-mono text-[9px] uppercase">
