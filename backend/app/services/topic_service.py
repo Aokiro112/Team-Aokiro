@@ -109,7 +109,11 @@ class TopicService:
 
         # 3. Associate entities to topics based on keywords and name overlaps
         for topic_id, topic in consolidated_topics.items():
+            is_syn_topic = topic.metadata.get("dataset_status") == "SYNTHETIC" or "synthetic" in topic.name.lower()
             for ent in entities:
+                is_syn_ent = ent.metadata.get("dataset_status") == "SYNTHETIC" or "synthetic" in ent.canonical_name.lower()
+                if is_syn_topic != is_syn_ent:
+                    continue
                 ent_name_lower = ent.canonical_name.lower()
                 if any(kw in ent_name_lower or ent_name_lower in kw for kw in topic.keywords):
                     if ent.id not in topic.entity_ids:

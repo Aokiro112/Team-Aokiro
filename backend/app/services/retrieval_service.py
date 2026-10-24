@@ -2,6 +2,7 @@
 Combines semantic vector retrieval, knowledge graph traversal, and topic community discovery.
 Preserves verifiable source chunk provenance and graph paths.
 """
+import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
@@ -104,16 +105,19 @@ class RetrievalService:
         # Synthetic Record Quarantine: Filter synthetic fixtures from real-world answers unless explicitly queried
         q_lower_check = query.lower()
         asks_about_synthetic = any(w in q_lower_check for w in ["synthetic", "fixture", "northstar", "testland", "syn-", "example beverage group"])
+        asks_about_benchmarks = any(w in q_lower_check for w in ["benchmark", "gold standard", "eval rubric", "test dataset question"])
         if not asks_about_synthetic:
             retrieved_chunks = [
                 c for c in retrieved_chunks
                 if "status=synthetic" not in (c.get("text") or "").lower()
                 and "synthetic records for parser" not in (c.get("text") or "").lower()
+                and (asks_about_benchmarks or not re.search(r"^(?:q:\s*|expected:\s*|gold-standard)", (c.get("text") or "").strip(), re.IGNORECASE))
             ]
-            related_entities = [e for e in related_entities if e.metadata.get("dataset_status") != "SYNTHETIC"]
+            related_entities = [e for e in related_entities if e.metadata.get("dataset_status") != "SYNTHETIC" and "synthetic" not in e.canonical_name.lower()]
             supporting_paths = [
                 p for p in supporting_paths
-                if not any(e.metadata.get("dataset_status") == "SYNTHETIC" for e in p.edges)
+                if not any(e.metadata.get("dataset_status") == "SYNTHETIC" or "synthetic" in (e.relationship_type or "").lower() for e in p.edges)
+                and "synthetic" not in p.description.lower()
             ]
 
         trace.append("evidence_validation")

@@ -208,18 +208,28 @@ Context:
 
 Question: {query}
 Answer:"""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=settings.LLM_TIMEOUT_SECONDS) as client:
             resp = await client.post(
                 f"{self.base_url}/api/generate",
                 json={
                     "model": target_model,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {"temperature": 0.0},
+                    "think": False,
+                    "options": {
+                        "temperature": 0.1,
+                        "num_ctx": 4096,
+                    },
                 },
             )
             if resp.status_code == 200:
-                return resp.json().get("response", "").strip()
+                data = resp.json()
+                resp_text = (data.get("response") or "").strip()
+                if not resp_text and data.get("thinking"):
+                    # Fallback if model placed text inside thinking
+                    clean_think = re.sub(r"<think>.*?</think>", "", data.get("thinking", ""), flags=re.DOTALL).strip()
+                    resp_text = clean_think or data.get("thinking", "").strip()
+                return resp_text if resp_text else None
         return None
 
     async def _call_openai(self, query: str, context: str) -> Optional[str]:
@@ -264,6 +274,7 @@ Question: {query}"""
 
         # Extract and sanitize informative sentences from citations
         cleaned_passages = []
+        is_asking_eval = any(w in q_lower for w in ["benchmark", "question", "eval", "gold standard", "rubric"])
         for idx, citation in enumerate(citations):
             raw_text = citation.excerpt or ""
             lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
@@ -271,24 +282,37 @@ Question: {query}"""
             clean_excerpt = re.sub(r"^\d{1,2}\s*\|\s*[^:\n]+:\s*", "", clean_excerpt)
 
             # Split into clean sentences
-            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", clean_excerpt) if len(s.strip()) > 20]
-            if sentences:
-                # Prioritize sentence with highest keyword overlap to query
+            raw_sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", clean_excerpt)]
+            valid_sentences = []
+            for s in raw_sentences:
+                clean_s = re.sub(r"^[,;:\-\s]+", "", s).strip()
+                if len(clean_s) < 25:
+                    continue
+                # Skip benchmark QA rows unless user asked about benchmarks
+                if not is_asking_eval and re.search(r"^(?:q:|expected:|gold-standard|rubric)", clean_s, re.IGNORECASE):
+                    continue
+                valid_sentences.append(clean_s)
+
+            if valid_sentences:
                 query_words = set(re.findall(r"\b[a-z]{4,}\b", q_lower))
-                best_s = sentences[0]
+                best_s = valid_sentences[0]
                 best_score = -1
-                for s in sentences:
+                for s in valid_sentences:
                     s_words = set(re.findall(r"\b[a-z]{4,}\b", s.lower()))
                     overlap = len(s_words & query_words)
                     if overlap > best_score:
                         best_score = overlap
                         best_s = s
+                # Ensure sentence ends with period before citation
+                if not best_s.endswith((".", "!", "?")):
+                    best_s += "."
                 cleaned_passages.append(f"{best_s} [{idx+1}]")
 
         if not cleaned_passages and chunks:
             raw_c = chunks[0].get("text", "")
-            first_line = raw_c.split("\n")[0][:200]
-            cleaned_passages.append(f"{first_line} [1]")
+            first_line = re.sub(r"^[,;:\-\s]+", "", raw_c.split("\n")[0]).strip()[:200]
+            if first_line:
+                cleaned_passages.append(f"{first_line}. [1]")
 
         body = "\n\n".join(cleaned_passages)
 

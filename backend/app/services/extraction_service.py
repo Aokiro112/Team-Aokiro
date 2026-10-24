@@ -543,6 +543,9 @@ Text:
                 candidate_themes.append(f"{top_terms[0][0].capitalize()} Theme")
 
         for topic_name in candidate_themes[:2]:
+            is_syn_topic = chunk_is_synthetic or any(
+                w in topic_name.lower() for w in ["synthetic", "syn-", "fixture", "benchmark test", "test dataset", "rubric"]
+            )
             tid = generate_topic_id(topic_name)
             top_obj = TopicModel(
                 id=tid,
@@ -551,11 +554,14 @@ Text:
                 keywords=[w.lower() for w in re.findall(r"\w+", topic_name)],
                 document_ids=[document_id],
                 representative_passages=[chunk_text[:300]],
+                metadata={"dataset_status": "SYNTHETIC" if is_syn_topic else "FACT"},
             )
             topics_dict[tid] = top_obj
 
             for eid, ent in list(entities_dict.items()):
-                if tid not in ent.topic_ids:
+                # Only link to entities with matching synthetic status
+                ent_is_syn = ent.metadata.get("dataset_status") == "SYNTHETIC"
+                if is_syn_topic == ent_is_syn and tid not in ent.topic_ids:
                     ent.topic_ids.append(tid)
 
         return {

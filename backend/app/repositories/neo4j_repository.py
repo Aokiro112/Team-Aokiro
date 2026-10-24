@@ -173,6 +173,7 @@ class InMemoryGraphEngine:
                 description=topic.description,
                 document_ids=topic.document_ids,
                 topic_ids=[topic.id],
+                metadata=topic.metadata,
             )
             self.entity_nodes[topic.id] = topic_node
             self.graph.add_node(topic.id, canonical_name=topic.name, entity_type="Topic")
@@ -195,12 +196,16 @@ class InMemoryGraphEngine:
                     description=topic.description,
                     document_ids=topic.document_ids,
                     topic_ids=[topic.id],
+                    metadata=topic.metadata,
                 )
                 self.graph.add_node(topic_id, canonical_name=topic.name, entity_type="Topic")
 
             # Create an explicit BELONGS_TO_TOPIC edge
             edge_id = f"rel_{topic_id}_{entity_id}"
             if edge_id not in self.edge_records:
+                is_syn = (topic.metadata.get("dataset_status") == "SYNTHETIC") or \
+                         (self.entity_nodes[entity_id].metadata.get("dataset_status") == "SYNTHETIC") or \
+                         ("synthetic" in topic.name.lower())
                 edge = EdgeModel(
                     id=edge_id,
                     source=topic_id,
@@ -209,6 +214,7 @@ class InMemoryGraphEngine:
                     evidence=f"Associated with thematic topic '{topic.name}'",
                     confidence=0.95,
                     document_ids=topic.document_ids,
+                    metadata={"dataset_status": "SYNTHETIC" if is_syn else "FACT"},
                 )
                 self.upsert_edge(edge)
 

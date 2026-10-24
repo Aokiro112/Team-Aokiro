@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "http://localhost:11434"
     LLM_MODEL: str = "qwen3:1.7b"
     LLM_API_KEY: str = ""
-    LLM_TIMEOUT_SECONDS: float = 45.0
+    LLM_TIMEOUT_SECONDS: float = 120.0
     LLM_TEMPERATURE: float = 0.1
 
     # Graph Retrieval Constraints
