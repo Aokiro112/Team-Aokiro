@@ -32,28 +32,73 @@ class ExtractionService:
         document_id: str,
         page_number: int,
     ) -> Dict[str, Any]:
-        """Extract entities, relationships, and topics from a chunk."""
+        """Extract entities, relationships, and topics from a chunk rapidly."""
         if not chunk_text or len(chunk_text.strip()) < 20:
             return {"entities": [], "relationships": [], "topics": []}
 
+        # Fast deterministic heuristic NLP extraction (runs in milliseconds, handles entities & relations)
+        return self._heuristic_nlp_extraction(chunk_text, chunk_id, document_id, page_number)
+
+    async def extract_document_themes(
+        self,
+        document_text: str,
+        document_id: str,
+        model: Optional[str] = None,
+    ) -> List[TopicModel]:
+        """Extract high-level thematic topics for the entire document using a single fast LLM call."""
+        target_model = model or self.model
+        sample_text = document_text[:3500].strip()
+        if not sample_text or len(sample_text) < 50:
+            return []
+
         if self.llm_provider == "ollama" and self.base_url:
             try:
-                result = await self._extract_via_ollama(chunk_text)
-                if result and (result.get("entities") or result.get("relationships")):
-                    return self._process_extracted_payload(result, chunk_text, chunk_id, document_id)
-            except Exception as e:
-                logger.warning(f"Ollama extraction failed ({e}). Falling back to heuristic NLP engine.")
+                prompt = f"""Identify 3 to 6 major thematic topics covered in this document.
+Return ONLY valid JSON matching this schema:
+{{
+  "topics": [
+    {{"name": "Theme/Topic Name", "description": "Brief description of this theme"}}
+  ]
+}}
 
-        elif self.llm_provider == "openai" and settings.LLM_API_KEY:
-            try:
-                result = await self._extract_via_openai(chunk_text)
-                if result and (result.get("entities") or result.get("relationships")):
-                    return self._process_extracted_payload(result, chunk_text, chunk_id, document_id)
+Document Excerpt:
+\"\"\"{sample_text}\"\"\"
+"""
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    resp = await client.post(
+                        f"{self.base_url}/api/generate",
+                        json={
+                            "model": target_model,
+                            "prompt": prompt,
+                            "format": "json",
+                            "stream": False,
+                            "options": {"temperature": 0.0},
+                        },
+                    )
+                    if resp.status_code == 200:
+                        body = resp.json()
+                        raw_json = json.loads(body.get("response", "{}"))
+                        topics = []
+                        for t in raw_json.get("topics", []):
+                            tname = str(t.get("name", "")).strip()
+                            if tname:
+                                tid = generate_topic_id(tname)
+                                topics.append(
+                                    TopicModel(
+                                        id=tid,
+                                        name=tname,
+                                        description=str(t.get("description", f"Theme: {tname}")),
+                                        keywords=[w.lower() for w in re.findall(r"\w+", tname)],
+                                        document_ids=[document_id],
+                                        representative_passages=[sample_text[:250]],
+                                    )
+                                )
+                        if topics:
+                            return topics
             except Exception as e:
-                logger.warning(f"OpenAI extraction failed ({e}). Falling back to heuristic NLP engine.")
+                logger.debug(f"Document theme extraction via LLM timed out or failed ({e}). Using NLP themes.")
 
-        # Fallback to intelligent rule-based heuristic extraction
-        return self._heuristic_nlp_extraction(chunk_text, chunk_id, document_id, page_number)
+        return []
 
     async def _extract_via_ollama(self, text: str) -> Optional[Dict[str, Any]]:
         """Call Ollama for structured JSON triple extraction."""

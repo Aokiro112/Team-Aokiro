@@ -48,11 +48,12 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
       setNodes(data.nodes);
       setEdges(data.edges);
 
-      // Default select "Transformer" (primary node in design)
-      const transformer = data.nodes.find((n) => n.canonical_name === 'Transformer') || data.nodes[0];
-      if (transformer) {
-        setSelectedNode(transformer);
-        const detail = await graphApi.getNodeDetails(transformer.id);
+      // Default select highest degree node
+      const sorted = [...data.nodes].sort((a, b) => (b.degree || 0) - (a.degree || 0));
+      const primaryNode = sorted[0];
+      if (primaryNode) {
+        setSelectedNode(primaryNode);
+        const detail = await graphApi.getNodeDetails(primaryNode.id);
         setNodeDetail(detail);
       }
     };
@@ -75,7 +76,8 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
       { x: number; y: number; vx: number; vy: number; isCenter?: boolean }
     >();
 
-    const centerNode = nodes.find((n) => n.canonical_name === 'Transformer') || nodes[0];
+    const sorted = [...nodes].sort((a, b) => (b.degree || 0) - (a.degree || 0));
+    const centerNode = sorted[0];
 
     // Center node position (0, 0 in canvas center)
     positions.set(centerNode.id, { x: 0, y: 0, vx: 0, vy: 0, isCenter: true });

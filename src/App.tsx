@@ -6,6 +6,7 @@ import { DocumentsView } from './views/DocumentsView';
 import { KnowledgeGraphView } from './views/KnowledgeGraphView';
 import { TopicsView } from './views/TopicsView';
 import { AskChatView } from './views/AskChatView';
+import { SplitWorkspaceView } from './views/SplitWorkspaceView';
 import { CommandPalette } from './components/modals/CommandPalette';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { CitationModal } from './components/modals/CitationModal';
@@ -14,7 +15,7 @@ import { Citation, DocumentResponse } from './types/backend';
 import { documentsApi } from './services/api';
 
 export const App: React.FC = () => {
-  const [currentTab, setCurrentTab] = useState<NavigationTab>('home');
+  const [currentTab, setCurrentTab] = useState<NavigationTab>('workspace');
   const [documents, setDocuments] = useState<DocumentResponse[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -50,6 +51,13 @@ export const App: React.FC = () => {
 
         {/* View Pages */}
         <main className="flex-1 overflow-y-auto">
+          {currentTab === 'workspace' && (
+            <SplitWorkspaceView
+              onOpenCitation={(citation) => setSelectedCitation(citation)}
+              onSelectDocument={(doc) => setSelectedDocument(doc)}
+            />
+          )}
+
           {currentTab === 'home' && (
             <HomeView
               documents={documents}

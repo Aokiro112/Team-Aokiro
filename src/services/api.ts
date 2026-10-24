@@ -359,124 +359,36 @@ export const topicsApi = {
 export const chatApi = {
   async queryKnowledgeBase(request: QueryRequest): Promise<QueryResponse> {
     const config = getAppConfig();
-    if (!config.useMock) {
-      try {
-        const res = await fetch(`${config.apiBaseUrl}/chat/query`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(request),
-        });
-        if (res.ok) return await res.json();
-      } catch (err) {
-        console.warn('Backend chat query failed:', err);
+    try {
+      const res = await fetch(`${config.apiBaseUrl}/chat/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+      if (res.ok) {
+        return await res.json();
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Server returned ${res.status}`);
       }
-    }
-
-    // Dynamic mock response synthesis based on query keywords
-    await new Promise((r) => setTimeout(r, 700)); // realistic thinking delay
-
-    const q = request.query.toLowerCase();
-
-    if (q.includes('bert') || q.includes('gpt')) {
+    } catch (err: any) {
+      console.warn('Backend chat query failed:', err);
       return {
-        request_id: `req-${Date.now()}`,
+        request_id: `req-err-${Date.now()}`,
         query: request.query,
-        intent: 'THEMATIC',
+        intent: 'UNANSWERABLE',
         retrieval_strategy: request.retrieval_strategy_override || 'HYBRID',
-        answer: `**BERT vs GPT Architectural Comparison:**
-
-1. **BERT (Bidirectional Encoder Representations from Transformers):**
-   - Uses masked language modeling with bi-directional attention context.
-   - Ideal for classification, extractive QA, and token tagging.
-   - Grounded in *"NLP Summary.pdf" (p. 8)*.
-
-2. **GPT (Generative Pre-trained Transformer):**
-   - Uses causal auto-regressive decoding with masked future tokens.
-   - Optimized for open-ended text synthesis and instruction-following reasoning.
-   - Grounded in *"Transformer Architecture.pdf" (p. 15)*.`,
-        evidence_sufficiency: 'SUFFICIENT',
-        citations: [
-          {
-            citation_id: 'cit-bert',
-            document_id: 'doc-4',
-            document_filename: 'NLP Summary.pdf',
-            chunk_id: 'chunk-201',
-            page_number: 8,
-            excerpt: 'BERT utilizes bidirectional self-attention to fuse left and right context representations throughout all layers.',
-            relevance_score: 0.96,
-          },
-          {
-            citation_id: 'cit-gpt',
-            document_id: 'doc-1',
-            document_filename: 'Transformer Architecture.pdf',
-            chunk_id: 'chunk-202',
-            page_number: 15,
-            excerpt: 'Autoregressive generative pretraining masks upper-triangular attention matrices to prevent information leakage.',
-            relevance_score: 0.91,
-          },
-        ],
-        supporting_passages: [
-          'Bidirectional encoders attend to both past and future tokens simultaneously.',
-        ],
-        related_entities: [
-          localNodes.find((n) => n.id === 'node-bert') || localNodes[0],
-          localNodes.find((n) => n.id === 'node-gpt') || localNodes[1],
-        ],
+        answer: `Could not connect to backend at ${config.apiBaseUrl}. Please ensure the backend server is running.\n\nError: ${err.message}`,
+        evidence_sufficiency: 'INSUFFICIENT',
+        citations: [],
+        supporting_passages: [],
+        related_entities: [],
         supporting_paths: [],
-        retrieval_trace: [
-          'Intent classified as COMPARATIVE THEMATIC',
-          'Identified 2 cross-architecture nodes in Knowledge Graph',
-          'Synthesized comparative breakdown with 2 citations',
-        ],
-        warnings: [],
-        metadata: { latency_ms: 38 },
+        retrieval_trace: ['Connection error to backend /chat/query'],
+        warnings: [err.message],
+        metadata: {},
       };
     }
-
-    // Default grounded answer for Attention Mechanism (matches screenshot!)
-    return {
-      request_id: `req-${Date.now()}`,
-      query: request.query,
-      intent: 'FACTUAL',
-      retrieval_strategy: request.retrieval_strategy_override || 'HYBRID',
-      answer: `The attention mechanism allows the model to focus on relevant parts of the input while processing each token. Based on your documents ("Transformer Architecture.pdf", page 12):
-
-1. **It computes Query, Key and Value vectors** for each token.
-2. **Uses scaled dot-product attention** to get attention scores:
-   $$\\text{Attention}(Q, K, V) = \\text{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}}\\right)V$$
-3. **Produces a weighted sum** of values based on these scores.
-
-**Example:** In your notes, the sentence *"The cat sat on the mat"* shows higher attention between *"cat"* and *"sat"* because they are semantically related.`,
-      evidence_sufficiency: 'SUFFICIENT',
-      citations: [
-        {
-          citation_id: 'cit-attn',
-          document_id: 'doc-1',
-          document_filename: 'Transformer Architecture.pdf',
-          chunk_id: 'chunk-101',
-          page_number: 12,
-          excerpt:
-            'The attention mechanism allows the model to focus on relevant parts of the input while processing each token. It computes Query, Key and Value vectors, uses scaled dot-product attention, and produces a weighted sum of values based on attention scores.',
-          relevance_score: 0.95,
-        },
-      ],
-      supporting_passages: [
-        'Scaled dot-product attention uses inner products between queries and keys divided by the root dimension.',
-      ],
-      related_entities: [
-        localNodes.find((n) => n.id === 'node-transformer') || localNodes[0],
-        localNodes.find((n) => n.id === 'node-attention-mechanism') || localNodes[1],
-        localNodes.find((n) => n.id === 'node-self-attention') || localNodes[2],
-      ],
-      supporting_paths: [],
-      retrieval_trace: [
-        'Query router selected HYBRID strategy (Vector + Graph Expansion)',
-        'Extracted primary entity: Transformer (id: node-transformer)',
-        'Retrieved page 12 from Transformer Architecture.pdf',
-      ],
-      warnings: [],
-      metadata: { latency_ms: 45 },
-    };
   },
 };
 

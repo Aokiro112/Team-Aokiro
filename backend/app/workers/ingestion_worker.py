@@ -115,6 +115,11 @@ class IngestionWorker:
                 all_raw_edges.extend(res.get("relationships", []))
                 all_raw_topics.extend(res.get("topics", []))
 
+            # Extract global document themes via single fast LLM call
+            doc_sample_text = " ".join([p.get("text", "") for p in pages[:10]])
+            doc_themes = await self.extract_svc.extract_document_themes(doc_sample_text, document_id)
+            all_raw_topics.extend(doc_themes)
+
             job["stage_durations"]["extraction"] = time.time() - t_stage
 
             # Stage 6: Conservative Entity Resolution

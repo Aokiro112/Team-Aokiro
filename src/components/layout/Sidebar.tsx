@@ -7,9 +7,10 @@ import {
   MessageSquare,
   Settings,
   ChevronDown,
+  Columns,
 } from 'lucide-react';
 
-export type NavigationTab = 'home' | 'documents' | 'graph' | 'topics' | 'ask';
+export type NavigationTab = 'workspace' | 'home' | 'documents' | 'graph' | 'topics' | 'ask';
 
 interface SidebarProps {
   currentTab: NavigationTab;
@@ -27,6 +28,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     label: string;
     icon: React.ElementType;
   }> = [
+    { id: 'workspace', label: 'Split Workspace', icon: Columns },
     { id: 'home', label: 'Home', icon: Home },
     { id: 'documents', label: 'Documents', icon: FileText },
     { id: 'graph', label: 'Knowledge Graph', icon: Share2 },
