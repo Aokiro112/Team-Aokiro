@@ -237,6 +237,14 @@ export interface QueryResponse {
   metadata: Record<string, any>;
 }
 
+export interface ChatMessage {
+  id: string;
+  sender: 'user' | 'assistant';
+  text: string;
+  timestamp: string;
+  response?: QueryResponse;
+}
+
 export interface ModelItem {
   name: string;
   display_name: string;

@@ -11,8 +11,10 @@ import { CommandPalette } from './components/modals/CommandPalette';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { CitationModal } from './components/modals/CitationModal';
 import { DocumentDetailModal } from './components/modals/DocumentDetailModal';
-import { Citation, DocumentResponse } from './types/backend';
+import { Citation, DocumentResponse, ChatMessage } from './types/backend';
 import { documentsApi } from './services/api';
+
+const CHAT_STORAGE_KEY = 'nexus_chat_history';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<NavigationTab>('workspace');
@@ -21,6 +23,34 @@ export const App: React.FC = () => {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
   const [selectedDocument, setSelectedDocument] = useState<DocumentResponse | null>(null);
+
+  // Persisted chat history across tab switches and browser reloads
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const saved = localStorage.getItem(CHAT_STORAGE_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch (err) {
+      console.warn('Failed to load chat history from localStorage:', err);
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
+    } catch (err) {
+      console.warn('Failed to save chat history to localStorage:', err);
+    }
+  }, [messages]);
+
+  const handleClearChat = () => {
+    setMessages([]);
+    try {
+      localStorage.removeItem(CHAT_STORAGE_KEY);
+    } catch (err) {
+      console.warn('Failed to clear chat history in localStorage:', err);
+    }
+  };
 
   // Load documents
   const loadDocuments = async () => {
@@ -55,6 +85,9 @@ export const App: React.FC = () => {
             <SplitWorkspaceView
               onOpenCitation={(citation) => setSelectedCitation(citation)}
               onSelectDocument={(doc) => setSelectedDocument(doc)}
+              messages={messages}
+              setMessages={setMessages}
+              onClearChat={handleClearChat}
             />
           )}
 
@@ -89,6 +122,9 @@ export const App: React.FC = () => {
           {currentTab === 'ask' && (
             <AskChatView
               onOpenCitation={(citation) => setSelectedCitation(citation)}
+              messages={messages}
+              setMessages={setMessages}
+              onClearChat={handleClearChat}
             />
           )}
         </main>

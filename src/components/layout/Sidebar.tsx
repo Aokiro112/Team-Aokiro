@@ -93,14 +93,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="flex items-center justify-between px-3 py-2 rounded-xl hover:bg-neutral-50 transition-colors cursor-pointer group">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full bg-[#18181B] text-white text-xs font-bold flex items-center justify-center shadow-inner">
-              M
+              U
             </div>
-            <div className="flex flex-col text-left">
-              <span className="text-sm font-semibold text-neutral-800 leading-tight">
-                Student
-              </span>
-              <span className="text-[11px] text-neutral-400 font-medium">Free Plan</span>
-            </div>
+            <span className="text-sm font-semibold text-neutral-800 leading-tight">
+              User
+            </span>
           </div>
           <ChevronDown
             size={14}

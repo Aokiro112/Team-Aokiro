@@ -142,7 +142,7 @@ export const documentsApi = {
       total_relationships: Math.floor(Math.random() * 50) + 25,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-      metadata: { uploaded_by: 'Student' },
+      metadata: { uploaded_by: 'User' },
     };
 
     localDocuments = [newDoc, ...localDocuments];

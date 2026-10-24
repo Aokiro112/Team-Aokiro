@@ -13,28 +13,55 @@ import {
   HelpCircle,
   RefreshCw,
   Cpu,
+  Trash2,
 } from 'lucide-react';
-import { Citation, QueryRequest, QueryResponse, RetrievalStrategy } from '../types/backend';
+import { Citation, QueryRequest, QueryResponse, RetrievalStrategy, ChatMessage } from '../types/backend';
 import { chatApi } from '../services/api';
 import { INITIAL_CHAT_MESSAGES } from '../services/mockData';
+import { RichAnswerRenderer } from '../components/chat/RichAnswerRenderer';
+import { RetrievalLoadingIndicator } from '../components/chat/RetrievalLoadingIndicator';
 
 interface AskChatViewProps {
   onOpenCitation: (citation: Citation) => void;
+  messages?: ChatMessage[];
+  setMessages?: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  onClearChat?: () => void;
 }
 
-export const AskChatView: React.FC<AskChatViewProps> = ({ onOpenCitation }) => {
+export const AskChatView: React.FC<AskChatViewProps> = ({
+  onOpenCitation,
+  messages: propMessages,
+  setMessages: propSetMessages,
+  onClearChat,
+}) => {
   const [selectedModel, setSelectedModel] = useState<string>(
     () => localStorage.getItem('nexus_selected_model') || 'qwen3:1.7b'
   );
-  const [messages, setMessages] = useState<
-    Array<{
-      id: string;
-      sender: 'user' | 'assistant';
-      text: string;
-      timestamp: string;
-      response?: QueryResponse;
-    }>
-  >(INITIAL_CHAT_MESSAGES);
+
+  const [fallbackMessages, setFallbackMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const saved = localStorage.getItem('nexus_chat_history');
+      return saved ? JSON.parse(saved) : INITIAL_CHAT_MESSAGES;
+    } catch {
+      return INITIAL_CHAT_MESSAGES;
+    }
+  });
+
+  const messages = propMessages ?? fallbackMessages;
+  const setMessages = propSetMessages ?? setFallbackMessages;
+
+  const handleClearChat = () => {
+    if (onClearChat) {
+      onClearChat();
+    } else {
+      setMessages([]);
+      try {
+        localStorage.removeItem('nexus_chat_history');
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+  };
 
   const [inputQuery, setInputQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -185,6 +212,18 @@ export const AskChatView: React.FC<AskChatViewProps> = ({ onOpenCitation }) => {
               </div>
             )}
           </div>
+
+          {/* Clear Chat Button */}
+          {messages.length > 0 && (
+            <button
+              onClick={handleClearChat}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-neutral-200 text-neutral-500 hover:text-red-600 hover:bg-red-50 hover:border-red-200 transition-colors cursor-pointer"
+              title="Clear conversation"
+            >
+              <Trash2 size={13} />
+              <span>Clear</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -209,82 +248,34 @@ export const AskChatView: React.FC<AskChatViewProps> = ({ onOpenCitation }) => {
 
               {/* Message Content Bubble */}
               <div
-                className={`max-w-2xl rounded-2xl p-5 ${
+                className={`max-w-3xl rounded-2xl p-5 leading-relaxed ${
                   isUser
-                    ? 'bg-[#F2F2F5] text-neutral-900 rounded-tr-xs'
-                    : 'bg-white border border-[#EBEBEF] text-neutral-800 rounded-tl-xs shadow-2xs'
+                    ? 'bg-[#F2F2F5] text-neutral-900 rounded-tr-xs text-xs sm:text-[13px] whitespace-pre-wrap font-sans'
+                    : 'bg-white border border-[#EBEBEF] text-neutral-800 rounded-tl-xs shadow-2xs w-full'
                 }`}
               >
-                {/* Text Body */}
-                <div className="text-sm leading-relaxed whitespace-pre-wrap font-sans">
-                  {msg.text}
-                </div>
-
-                {/* Grounded Citation Cards (For Assistant) */}
-                {!isUser && msg.response?.citations && msg.response.citations.length > 0 && (
-                  <div className="mt-4 pt-3 border-t border-neutral-100 space-y-2">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-400 block font-mono">
-                      Source(s):
-                    </span>
-                    <div className="flex flex-wrap gap-2">
-                      {msg.response.citations.map((citation) => (
-                        <button
-                          key={citation.citation_id}
-                          onClick={() => onOpenCitation(citation)}
-                          className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-neutral-50 hover:bg-neutral-100 border border-neutral-200/80 text-xs text-neutral-700 hover:text-black transition-all group"
-                        >
-                          <FileText size={14} className="text-neutral-500 group-hover:text-black" />
-                          <span className="font-medium truncate max-w-[180px]">
-                            {citation.document_filename}
-                          </span>
-                          <span className="font-mono text-neutral-400 text-[11px]">
-                            p. {citation.page_number}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Related Entities Tags */}
-                {!isUser && msg.response?.related_entities && msg.response.related_entities.length > 0 && (
-                  <div className="mt-3 flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[10px] text-neutral-400 uppercase font-mono mr-1">
-                      Entities:
-                    </span>
-                    {msg.response.related_entities.map((ent) => (
-                      <span
-                        key={ent.id}
-                        className="text-[11px] px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-600 font-medium"
-                      >
-                        {ent.canonical_name}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {/* Inference Model Used Badge */}
-                {!isUser && msg.response?.model_used && (
-                  <div className="mt-3 pt-2 border-t border-neutral-100/70 flex items-center gap-1.5 text-[10px] text-neutral-400 font-mono">
-                    <Cpu size={11} className="text-emerald-500" />
-                    <span>Inference: <strong className="text-neutral-700 font-semibold">{msg.response.model_used}</strong></span>
-                  </div>
+                {isUser ? (
+                  <div>{msg.text}</div>
+                ) : (
+                  <RichAnswerRenderer
+                    content={msg.text}
+                    citations={msg.response?.citations}
+                    response={msg.response}
+                    onOpenCitation={onOpenCitation}
+                  />
                 )}
               </div>
             </div>
           );
         })}
 
-        {/* Loading Indicator Bubble */}
+        {/* Search-First Loading Indicator Bubble */}
         {isLoading && (
-          <div className="flex items-start gap-3.5 justify-start animate-pulse">
-            <div className="w-8 h-8 rounded-full bg-[#0F0F11] text-white flex items-center justify-center font-bold text-xs shrink-0">
+          <div className="flex items-start gap-3.5 justify-start">
+            <div className="w-8 h-8 rounded-full bg-[#0F0F11] text-white flex items-center justify-center font-bold text-xs shrink-0 mt-1">
               ✱
             </div>
-            <div className="bg-white border border-[#EBEBEF] rounded-2xl rounded-tl-xs p-4 shadow-2xs flex items-center gap-2 text-xs text-neutral-500">
-              <RefreshCw size={14} className="animate-spin text-neutral-800" />
-              <span>Grounded reasoning over knowledge graph & vector chunks...</span>
-            </div>
+            <RetrievalLoadingIndicator modelName={selectedModel} strategy={selectedStrategy} />
           </div>
         )}
 

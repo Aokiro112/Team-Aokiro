@@ -191,17 +191,24 @@ class AnswerService:
     async def _call_ollama(self, query: str, context: str, model: Optional[str] = None) -> Optional[str]:
         target_model = model or self.model
         prompt = f"""You are NEXUS AI, an advanced evidence-grounded research assistant.
-Your task is to write a cohesive, comprehensive, and well-written answer to the user's question based strictly on the provided Context.
+Your task is to write a cohesive, comprehensive, highly readable, and beautifully structured answer to the user's question based strictly on the provided Context.
 
-STRICT INSTRUCTIONS:
-1. Answer the question directly with clear, natural, and fluent prose in well-structured paragraphs.
-2. When detailing products, categories, or metrics, use clear bullet points.
-3. Every factual statement must cite its source bracketed citation like [1], [2].
-4. If the question asks about unverified, confidential, or unanswerable topics, clearly state that the fact is not established in the available corpus—never fabricate or speculate.
-5. If the evidence marks records as synthetic or test fixtures, explicitly state that they are test fixtures, not real-world entities.
-6. If Knowledge Graph Paths are provided below, synthesize how they connect the concepts, and end your response with a section titled:
+STRICT FORMATTING & SYNTAX GUIDELINES:
+1. Evidence-First Grounding:
+   - Ground every statement strictly in the provided Context.
+   - Attach bracketed inline citations directly to the claims or numbers they verify (e.g. "Net revenues reached $58.28 billion [1].").
+2. Strong Visual Formatting:
+   - Use Markdown headings (###) to organize logical sections.
+   - Keep paragraphs concise (2-3 sentences max) to avoid walls of text.
+   - Highlight key figures, dates, and terms in **bold**.
+   - Use clean bullet points (- **Topic / Year**: details [1]) for metrics and lists.
+   - When presenting multi-year financial data, metrics, or comparisons, include a clean Markdown table with headers (e.g. | Year | Metric | Value |).
+3. Boundaries:
+   - If facts are missing or confidential, explicitly note that they are not established in the available corpus. Never speculate or hallucinate.
+4. Knowledge Graph Relations:
+   - If Knowledge Graph Paths are provided below, conclude your answer with the section:
 ### Supporting Knowledge Graph Connections:
-followed by the directed relations.
+followed by bullet points detailing each directed connection.
 
 Context:
 {context}

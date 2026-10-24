@@ -34,12 +34,18 @@ import {
   QueryRequest,
   QueryResponse,
   RetrievalStrategy,
+  ChatMessage,
 } from '../types/backend';
 import { chatApi, documentsApi, graphApi } from '../services/api';
+import { RichAnswerRenderer } from '../components/chat/RichAnswerRenderer';
+import { RetrievalLoadingIndicator } from '../components/chat/RetrievalLoadingIndicator';
 
 interface SplitWorkspaceViewProps {
   onOpenCitation: (citation: Citation) => void;
   onSelectDocument: (doc: DocumentResponse) => void;
+  messages?: ChatMessage[];
+  setMessages?: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  onClearChat?: () => void;
 }
 
 interface NodeSimState {
@@ -57,6 +63,9 @@ interface NodeSimState {
 export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
   onOpenCitation,
   onSelectDocument,
+  messages: propMessages,
+  setMessages: propSetMessages,
+  onClearChat,
 }) => {
   // Document state
   const [documents, setDocuments] = useState<DocumentResponse[]>([]);
@@ -64,16 +73,32 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Chat state
-  const [messages, setMessages] = useState<
-    Array<{
-      id: string;
-      sender: 'user' | 'assistant';
-      text: string;
-      timestamp: string;
-      response?: QueryResponse;
-    }>
-  >([]);
+  // Chat state (props from App.tsx or localStorage fallback)
+  const [fallbackMessages, setFallbackMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const saved = localStorage.getItem('nexus_chat_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const messages = propMessages ?? fallbackMessages;
+  const setMessages = propSetMessages ?? setFallbackMessages;
+
+  const handleClearChat = () => {
+    if (onClearChat) {
+      onClearChat();
+    } else {
+      setMessages([]);
+      try {
+        localStorage.removeItem('nexus_chat_history');
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+  };
+
   const [inputQuery, setInputQuery] = useState('');
   const [isLoadingAnswer, setIsLoadingAnswer] = useState(false);
   const [availableModels, setAvailableModels] = useState<Array<{ name: string; display_name: string }>>([]);
@@ -1024,6 +1049,21 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
 
         {/* Middle: Grounded Chat Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {messages.length > 0 && (
+            <div className="flex items-center justify-between pb-2 border-b border-neutral-100 text-xs text-neutral-400">
+              <span className="font-mono text-[10px] uppercase tracking-wider font-semibold">
+                Conversation ({messages.length})
+              </span>
+              <button
+                onClick={handleClearChat}
+                className="flex items-center gap-1 text-[11px] font-medium text-neutral-400 hover:text-red-600 hover:bg-red-50 px-2 py-0.5 rounded-lg transition-colors cursor-pointer"
+                title="Clear conversation"
+              >
+                <Trash2 size={12} />
+                <span>Clear chat</span>
+              </button>
+            </div>
+          )}
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center p-6 text-neutral-400">
               <div className="w-12 h-12 rounded-2xl bg-white border border-neutral-200 flex items-center justify-center mb-3 shadow-2xs">
@@ -1054,51 +1094,24 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
               return (
                 <div key={msg.id} className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
                   <div
-                    className={`max-w-[90%] rounded-2xl p-4 text-xs leading-relaxed ${
+                    className={`max-w-[92%] rounded-2xl p-4 leading-relaxed ${
                       isUser
-                        ? 'bg-neutral-900 text-white rounded-tr-xs'
-                        : 'bg-white border border-neutral-200 text-neutral-800 rounded-tl-xs shadow-2xs'
+                        ? 'bg-neutral-900 text-white rounded-tr-xs text-xs sm:text-[13px] whitespace-pre-wrap'
+                        : 'bg-white border border-neutral-200/90 text-neutral-800 rounded-tl-xs shadow-2xs w-full'
                     }`}
                   >
-                    <div className="whitespace-pre-wrap">{msg.text}</div>
-
-                    {!isUser && msg.response && (
-                      <div className="mt-3 pt-3 border-t border-neutral-100 space-y-2">
-                        <button
-                          onClick={() => highlightAnswerEvidence(msg.response!)}
-                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-[11px] font-semibold transition-colors"
-                        >
-                          <Share2 size={12} />
-                          <span>Highlight Evidence on Graph</span>
-                        </button>
-
-                        {msg.response.citations.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5">
-                            {msg.response.citations.map((c) => (
-                              <button
-                                key={c.citation_id}
-                                onClick={() => onOpenCitation(c)}
-                                className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-neutral-100 hover:bg-neutral-200 text-[10px] text-neutral-700 font-mono transition-colors"
-                              >
-                                <FileText size={11} />
-                                <span className="truncate max-w-[120px]">{c.document_filename}</span>
-                                <span className="text-neutral-500">p.{c.page_number}</span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-
-                        <div className="flex items-center gap-2 pt-1 text-[10px] font-mono text-neutral-400">
-                          {msg.response.model_used && (
-                            <span className="flex items-center gap-1 text-emerald-700">
-                              <Cpu size={10} />
-                              {msg.response.model_used}
-                            </span>
-                          )}
-                          <span>•</span>
-                          <span className="uppercase text-neutral-600 font-bold">{msg.response.intent}</span>
-                        </div>
-                      </div>
+                    {isUser ? (
+                      <div>{msg.text}</div>
+                    ) : (
+                      <RichAnswerRenderer
+                        content={msg.text}
+                        citations={msg.response?.citations}
+                        response={msg.response}
+                        onOpenCitation={onOpenCitation}
+                        onHighlightEvidence={
+                          msg.response ? () => highlightAnswerEvidence(msg.response!) : undefined
+                        }
+                      />
                     )}
                   </div>
                 </div>
@@ -1106,9 +1119,8 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
             })
           )}
           {isLoadingAnswer && (
-            <div className="flex items-center gap-2 p-3 bg-white border border-neutral-200 rounded-xl text-xs text-neutral-500 shadow-2xs">
-              <RefreshCw size={13} className="animate-spin text-neutral-900" />
-              <span>Routing query & synthesizing grounded answer...</span>
+            <div className="flex items-start justify-start w-full">
+              <RetrievalLoadingIndicator modelName={selectedModel} strategy={selectedStrategy} />
             </div>
           )}
           <div ref={chatBottomRef} />
@@ -1150,9 +1162,20 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
               </button>
             </div>
 
-            {/* Retrieval Strategy Switcher */}
-            <div className="flex items-center gap-1">
+            {/* Retrieval Strategy Switcher & Clear History */}
+            <div className="flex items-center gap-1.5">
+              {messages.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearChat}
+                  className="px-2 py-0.8 rounded text-[10px] font-medium text-neutral-400 hover:text-red-600 hover:bg-red-50 border border-neutral-200/60 hover:border-red-200 transition-colors cursor-pointer"
+                  title="Clear chat history"
+                >
+                  Clear
+                </button>
+              )}
               <button
+                type="button"
                 onClick={() => setSelectedStrategy(selectedStrategy === 'HYBRID' ? 'VECTOR_ONLY' : 'HYBRID')}
                 className={`px-2.5 py-0.8 rounded text-[10px] font-bold font-mono transition-colors ${
                   selectedStrategy === 'HYBRID'
