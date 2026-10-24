@@ -2,7 +2,7 @@ import React from 'react';
 import {
   Upload,
   Share2,
-  Layers,
+  Columns,
   MessageSquare,
   FileText,
   ArrowRight,
@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { NavigationTab } from '../components/layout/Sidebar';
 import { DocumentResponse } from '../types/backend';
+import { formatRelativeTime } from './DocumentsView';
 
 interface HomeViewProps {
   documents: DocumentResponse[];
@@ -26,6 +27,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
 }) => {
   const quickActions = [
     {
+      title: 'Split Workspace',
+      subtitle: 'Dual chat & graph',
+      icon: Columns,
+      tab: 'workspace' as NavigationTab,
+    },
+    {
       title: 'Upload Documents',
       subtitle: 'PDF, TXT and more',
       icon: Upload,
@@ -36,12 +43,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
       subtitle: 'See connections',
       icon: Share2,
       tab: 'graph' as NavigationTab,
-    },
-    {
-      title: 'View Topics',
-      subtitle: 'Key concepts',
-      icon: Layers,
-      tab: 'topics' as NavigationTab,
     },
     {
       title: 'Ask NEXUS',
@@ -163,10 +164,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
           </div>
 
           <div className="divide-y divide-neutral-100">
-            {documents.slice(0, 4).map((doc, idx) => {
-              const times = ['3h ago', '1d ago', '2d ago', '3d ago'];
-              const timeLabel = times[idx] || 'Recently';
-              const isProcessing = doc.status === 'PROCESSING';
+            {documents.slice(0, 4).map((doc) => {
+              const timeLabel = formatRelativeTime(doc.created_at);
+              const isProcessing = doc.status === 'PENDING' || doc.status === 'PROCESSING';
+              const isFailed = doc.status === 'FAILED';
 
               return (
                 <div
@@ -193,18 +194,25 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ${
                         isProcessing
                           ? 'bg-blue-50 text-blue-700 border-blue-200 animate-pulse'
+                          : isFailed
+                          ? 'bg-rose-50 text-rose-700 border-rose-200'
                           : 'bg-neutral-100 text-neutral-700 border-neutral-200'
                       }`}
                     >
-                      {isProcessing ? 'Processing' : 'Processed'}
+                      {isProcessing ? 'Processing' : isFailed ? 'Failed' : 'Processed'}
                     </span>
-                    <span className="text-xs text-neutral-400 font-mono w-16 text-right">
+                    <span className="text-xs text-neutral-400 font-medium text-right">
                       {timeLabel}
                     </span>
                   </div>
                 </div>
               );
             })}
+            {documents.length === 0 && (
+              <div className="py-8 text-center text-neutral-400 text-xs">
+                No documents uploaded yet. Upload a document to start building your knowledge base.
+              </div>
+            )}
           </div>
         </div>
 
@@ -224,7 +232,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     <FileText size={17} />
                   </div>
                   <div>
-                    <span className="text-base font-bold text-neutral-900">12</span>
+                    <span className="text-base font-bold text-neutral-900">{documents.length}</span>
                     <p className="text-xs text-neutral-500 font-medium">Documents</p>
                   </div>
                 </div>
@@ -237,7 +245,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     <Network size={17} />
                   </div>
                   <div>
-                    <span className="text-base font-bold text-neutral-900">248</span>
+                    <span className="text-base font-bold text-neutral-900">
+                      {documents.reduce((acc, d) => acc + (d.total_entities || 0), 0)}
+                    </span>
                     <p className="text-xs text-neutral-500 font-medium">Entities</p>
                   </div>
                 </div>
@@ -250,7 +260,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     <GitBranch size={17} />
                   </div>
                   <div>
-                    <span className="text-base font-bold text-neutral-900">412</span>
+                    <span className="text-base font-bold text-neutral-900">
+                      {documents.reduce((acc, d) => acc + (d.total_relationships || 0), 0)}
+                    </span>
                     <p className="text-xs text-neutral-500 font-medium">Relationships</p>
                   </div>
                 </div>

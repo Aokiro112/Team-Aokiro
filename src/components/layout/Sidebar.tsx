@@ -3,7 +3,6 @@ import {
   Home,
   FileText,
   Share2,
-  Layers,
   MessageSquare,
   Settings,
   ChevronDown,
@@ -11,7 +10,7 @@ import {
   Plus,
 } from 'lucide-react';
 
-export type NavigationTab = 'workspace' | 'home' | 'documents' | 'graph' | 'topics' | 'ask';
+export type NavigationTab = 'workspace' | 'home' | 'documents' | 'graph' | 'ask';
 
 interface SidebarProps {
   currentTab: NavigationTab;
@@ -35,7 +34,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'home', label: 'Home', icon: Home },
     { id: 'documents', label: 'Documents', icon: FileText },
     { id: 'graph', label: 'Knowledge Graph', icon: Share2 },
-    { id: 'topics', label: 'Topics', icon: Layers },
     { id: 'ask', label: 'Ask', icon: MessageSquare },
   ];
 

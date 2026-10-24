@@ -105,6 +105,35 @@ export const documentsApi = {
         });
         if (res.ok) {
           const data = await res.json();
+          // Immediately dispatch update so optimistic document shows up in real time
+          window.dispatchEvent(new CustomEvent('nexus_documents_updated'));
+
+          // Poll job progress if job_id was generated
+          if (data.job_id) {
+            let isDone = false;
+            let attempts = 0;
+            while (!isDone && attempts < 40) {
+              attempts++;
+              await new Promise((r) => setTimeout(r, 350));
+              try {
+                const jobRes = await fetch(`${config.apiBaseUrl}/jobs/${data.job_id}`);
+                if (jobRes.ok) {
+                  const job = await jobRes.json();
+                  if (onProgress) {
+                    onProgress(job.current_stage || 'PROCESSING', job.progress_percent || Math.min(95, attempts * 10));
+                  }
+                  if (job.status === 'COMPLETED' || job.status === 'FAILED') {
+                    isDone = true;
+                  }
+                }
+              } catch {
+                // ignore polling errors
+              }
+            }
+          }
+
+          // Ingestion finished, notify all views to refresh real documents
+          window.dispatchEvent(new CustomEvent('nexus_documents_updated'));
           return { document: data.document, job_id: data.job_id || 'mock-job' };
         }
       } catch (err) {
@@ -146,6 +175,7 @@ export const documentsApi = {
     };
 
     localDocuments = [newDoc, ...localDocuments];
+    window.dispatchEvent(new CustomEvent('nexus_documents_updated'));
     return { document: newDoc, job_id: `job-${Date.now()}` };
   },
 
@@ -158,6 +188,7 @@ export const documentsApi = {
         });
         if (res.ok) {
           localDocuments = localDocuments.filter((d) => d.id !== documentId);
+          window.dispatchEvent(new CustomEvent('nexus_documents_updated'));
           return true;
         }
       } catch (err) {
@@ -166,6 +197,7 @@ export const documentsApi = {
     }
 
     localDocuments = localDocuments.filter((d) => d.id !== documentId);
+    window.dispatchEvent(new CustomEvent('nexus_documents_updated'));
     return true;
   },
 

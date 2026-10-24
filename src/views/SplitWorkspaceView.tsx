@@ -183,8 +183,16 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
     const handleModelChange = (e: any) => {
       if (e.detail) setSelectedModel(e.detail);
     };
+    const handleDocsUpdate = () => {
+      loadDocuments();
+      loadGraph();
+    };
     window.addEventListener('nexus_model_changed', handleModelChange);
-    return () => window.removeEventListener('nexus_model_changed', handleModelChange);
+    window.addEventListener('nexus_documents_updated', handleDocsUpdate);
+    return () => {
+      window.removeEventListener('nexus_model_changed', handleModelChange);
+      window.removeEventListener('nexus_documents_updated', handleDocsUpdate);
+    };
   }, []);
 
   useEffect(() => {

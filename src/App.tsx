@@ -4,7 +4,6 @@ import { TopNavbar } from './components/layout/TopNavbar';
 import { HomeView } from './views/HomeView';
 import { DocumentsView } from './views/DocumentsView';
 import { KnowledgeGraphView } from './views/KnowledgeGraphView';
-import { TopicsView } from './views/TopicsView';
 import { AskChatView } from './views/AskChatView';
 import { SplitWorkspaceView } from './views/SplitWorkspaceView';
 import { CommandPalette } from './components/modals/CommandPalette';
@@ -73,13 +72,35 @@ export const App: React.FC = () => {
 
   // Load documents
   const loadDocuments = async () => {
-    const res = await documentsApi.listDocuments();
-    setDocuments(res.items);
+    try {
+      const res = await documentsApi.listDocuments();
+      setDocuments(res.items);
+    } catch (err) {
+      console.warn('Failed to load documents:', err);
+    }
   };
 
   useEffect(() => {
     loadDocuments();
+    const handleUpdate = () => {
+      loadDocuments();
+    };
+    window.addEventListener('nexus_documents_updated', handleUpdate);
+    return () => window.removeEventListener('nexus_documents_updated', handleUpdate);
   }, []);
+
+  // Poll in real time when any document is pending or processing
+  useEffect(() => {
+    const hasPending = documents.some(
+      (d) => d.status === 'PENDING' || d.status === 'PROCESSING'
+    );
+    if (hasPending) {
+      const interval = setInterval(() => {
+        loadDocuments();
+      }, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [documents]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#F8F8FA]">
@@ -130,12 +151,6 @@ export const App: React.FC = () => {
 
           {currentTab === 'graph' && (
             <KnowledgeGraphView
-              onNavigateToDocuments={() => setCurrentTab('documents')}
-            />
-          )}
-
-          {currentTab === 'topics' && (
-            <TopicsView
               onNavigateToDocuments={() => setCurrentTab('documents')}
             />
           )}

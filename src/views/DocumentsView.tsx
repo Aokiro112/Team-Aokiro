@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Upload,
   FileText,
@@ -14,6 +14,30 @@ import {
 } from 'lucide-react';
 import { DocumentResponse } from '../types/backend';
 import { documentsApi } from '../services/api';
+
+export const formatRelativeTime = (isoString?: string): string => {
+  if (!isoString) return 'Just now';
+  try {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    if (isNaN(diffMs)) return 'Recently';
+    const diffSec = Math.max(0, Math.floor(diffMs / 1000));
+    if (diffSec < 60) return 'Just now';
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin === 1) return '1 min ago';
+    if (diffMin < 60) return `${diffMin} mins ago`;
+    const diffHour = Math.floor(diffMin / 60);
+    if (diffHour === 1) return '1 hour ago';
+    if (diffHour < 24) return `${diffHour} hours ago`;
+    const diffDays = Math.floor(diffHour / 24);
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return `${diffDays} days ago`;
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch {
+    return 'Recently';
+  }
+};
 
 interface DocumentsViewProps {
   documents: DocumentResponse[];
@@ -33,6 +57,25 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [currentStage, setCurrentStage] = useState('');
   const [activeMenuDocId, setActiveMenuDocId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-refresh on mount and listen to global document update events
+  useEffect(() => {
+    onRefresh();
+    const handleUpdate = () => onRefresh();
+    window.addEventListener('nexus_documents_updated', handleUpdate);
+    return () => window.removeEventListener('nexus_documents_updated', handleUpdate);
+  }, []);
+
+  // Poll while any document is in PENDING/PROCESSING or upload is active
+  useEffect(() => {
+    const isAnyPending = documents.some((d) => d.status === 'PENDING' || d.status === 'PROCESSING');
+    if (isAnyPending || isUploading) {
+      const interval = setInterval(() => {
+        onRefresh();
+      }, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [documents, isUploading]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -102,12 +145,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const filteredDocs = documents.filter((doc) => {
     const matchesSearch = doc.filename.toLowerCase().includes(searchQuery.toLowerCase());
     if (filter === 'processing') {
-      return matchesSearch && doc.status === 'PROCESSING';
+      return matchesSearch && (doc.status === 'PROCESSING' || doc.status === 'PENDING');
     }
     return matchesSearch;
   });
 
-  const processingCount = documents.filter((d) => d.status === 'PROCESSING').length;
+  const processingCount = documents.filter(
+    (d) => d.status === 'PROCESSING' || d.status === 'PENDING'
+  ).length;
 
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-8 animate-in fade-in duration-200">
@@ -245,17 +290,10 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100 text-sm">
-              {filteredDocs.map((doc, idx) => {
-                const addedTimes = [
-                  '3 hours ago',
-                  '1 day ago',
-                  '2 days ago',
-                  '3 days ago',
-                  '5 days ago',
-                  '6 days ago',
-                ];
-                const addedLabel = addedTimes[idx] || 'Recently';
-                const isProcessing = doc.status === 'PROCESSING';
+              {filteredDocs.map((doc) => {
+                const addedLabel = formatRelativeTime(doc.created_at);
+                const isProcessing = doc.status === 'PENDING' || doc.status === 'PROCESSING';
+                const isFailed = doc.status === 'FAILED';
 
                 return (
                   <tr
@@ -286,7 +324,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                     </td>
 
                     {/* Added */}
-                    <td className="py-4 px-6 text-xs text-neutral-500">
+                    <td className="py-4 px-6 text-xs text-neutral-500 font-medium">
                       {addedLabel}
                     </td>
 
@@ -296,15 +334,21 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                         className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ${
                           isProcessing
                             ? 'bg-blue-50 text-blue-700 border-blue-200'
+                            : isFailed
+                            ? 'bg-rose-50 text-rose-700 border-rose-200'
                             : 'bg-emerald-50 text-emerald-800 border-emerald-200'
                         }`}
                       >
                         <span
                           className={`w-1.5 h-1.5 rounded-full ${
-                            isProcessing ? 'bg-blue-500 animate-ping' : 'bg-emerald-600'
+                            isProcessing
+                              ? 'bg-blue-500 animate-ping'
+                              : isFailed
+                              ? 'bg-rose-500'
+                              : 'bg-emerald-600'
                           }`}
                         />
-                        {isProcessing ? 'Processing' : 'Processed'}
+                        {isProcessing ? 'Processing' : isFailed ? 'Failed' : 'Processed'}
                       </span>
                     </td>
 
@@ -353,6 +397,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   </tr>
                 );
               })}
+              {filteredDocs.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="py-12 text-center text-neutral-400 text-xs">
+                    {searchQuery
+                      ? 'No documents found matching your search.'
+                      : 'No documents yet. Click "Upload Documents" to get started.'}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

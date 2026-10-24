@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Search, FileText, Share2, Layers, MessageSquare, ArrowRight, X } from 'lucide-react';
+import { Search, FileText, Share2, Columns, MessageSquare, ArrowRight, X } from 'lucide-react';
 import { NavigationTab } from '../layout/Sidebar';
-import { INITIAL_DOCUMENTS, MOCK_NODES, MOCK_TOPICS } from '../../services/mockData';
+import { INITIAL_DOCUMENTS, MOCK_NODES } from '../../services/mockData';
 
 interface CommandPaletteProps {
   isOpen: boolean;
@@ -39,9 +39,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const filteredNodes = MOCK_NODES.filter((n) =>
     n.canonical_name.toLowerCase().includes(query.toLowerCase())
   );
-  const filteredTopics = MOCK_TOPICS.filter((t) =>
-    t.name.toLowerCase().includes(query.toLowerCase())
-  );
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-start justify-center pt-24 p-4 animate-in fade-in duration-150">
@@ -54,7 +51,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search documents, entities, topics or jump to page..."
+            placeholder="Search documents, entities, or jump to page..."
             className="w-full text-sm text-neutral-800 placeholder-neutral-400 bg-transparent outline-none font-medium"
           />
           <button
@@ -72,6 +69,18 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             <div className="px-3 pb-1 text-[11px] font-bold uppercase tracking-wider text-neutral-400">
               Quick Navigation
             </div>
+            <button
+              onClick={() => {
+                onNavigate('workspace');
+                onClose();
+              }}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-neutral-100 text-neutral-700 font-medium"
+            >
+              <span className="flex items-center gap-2.5">
+                <Columns size={16} className="text-neutral-400" /> Split Workspace
+              </span>
+              <ArrowRight size={14} className="text-neutral-300" />
+            </button>
             <button
               onClick={() => {
                 onNavigate('documents');
@@ -93,18 +102,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             >
               <span className="flex items-center gap-2.5">
                 <Share2 size={16} className="text-neutral-400" /> Knowledge Graph
-              </span>
-              <ArrowRight size={14} className="text-neutral-300" />
-            </button>
-            <button
-              onClick={() => {
-                onNavigate('topics');
-                onClose();
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-neutral-100 text-neutral-700 font-medium"
-            >
-              <span className="flex items-center gap-2.5">
-                <Layers size={16} className="text-neutral-400" /> Topics & Communities
               </span>
               <ArrowRight size={14} className="text-neutral-300" />
             </button>
@@ -170,33 +167,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                   </span>
                   <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-500 font-medium">
                     {n.entity_type}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Topics */}
-          {filteredTopics.length > 0 && (
-            <div className="py-2">
-              <div className="px-3 pb-1 text-[11px] font-bold uppercase tracking-wider text-neutral-400">
-                Topics ({filteredTopics.length})
-              </div>
-              {filteredTopics.slice(0, 3).map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => {
-                    onNavigate('topics');
-                    onClose();
-                  }}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-neutral-100 text-neutral-700"
-                >
-                  <span className="flex items-center gap-2.5 truncate font-medium">
-                    <Layers size={15} className="text-neutral-400 shrink-0" />
-                    {t.name}
-                  </span>
-                  <span className="text-xs text-neutral-400">
-                    {t.entity_count} mentions
                   </span>
                 </button>
               ))}
