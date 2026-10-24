@@ -11,6 +11,7 @@ import {
   Clock,
   Sparkles,
   AlertCircle,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { DocumentResponse } from '../types/backend';
 import { documentsApi } from '../services/api';
@@ -31,6 +32,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [currentStage, setCurrentStage] = useState('');
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [activeMenuDocId, setActiveMenuDocId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -39,6 +41,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (!file) return;
 
     setIsUploading(true);
+    setUploadError(null);
     setUploadProgress(5);
     setCurrentStage('QUEUED');
 
@@ -50,6 +53,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       onRefresh();
     } catch (err) {
       console.error('Upload failed:', err);
+      setUploadError(err instanceof Error ? err.message : 'Upload failed.');
     } finally {
       setTimeout(() => {
         setIsUploading(false);
@@ -66,6 +70,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (!file) return;
 
     setIsUploading(true);
+    setUploadError(null);
     setUploadProgress(5);
     setCurrentStage('QUEUED');
 
@@ -77,6 +82,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       onRefresh();
     } catch (err) {
       console.error('Drop upload failed:', err);
+      setUploadError(err instanceof Error ? err.message : 'Upload failed.');
     } finally {
       setTimeout(() => {
         setIsUploading(false);
@@ -139,7 +145,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         type="file"
         ref={fileInputRef}
         onChange={handleFileUpload}
-        accept=".pdf,.txt,.docx,.md"
+        accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.webp"
         className="hidden"
       />
 
@@ -158,7 +164,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         </h3>
         <p className="text-xs text-neutral-400 mt-1">or click to browse</p>
         <p className="text-[11px] text-neutral-400 mt-2 font-mono">
-          Supports PDF, TXT, DOCX — Max 100MB per file
+          Supports PDF, TXT, MD, PNG, JPG, WebP — Visual diagrams &amp; charts auto-analyzed
         </p>
 
         <button
@@ -189,6 +195,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             <span>Extracting Text → Chunking → Generating Embeddings → Graph Resolution</span>
             <span>FastAPI Background Task</span>
           </div>
+        </div>
+      )}
+
+      {uploadError && (
+        <div className="flex items-start gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800">
+          <AlertCircle size={15} className="mt-0.5 shrink-0" />
+          <span>{uploadError}</span>
         </div>
       )}
 
@@ -280,9 +293,17 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       </div>
                     </td>
 
-                    {/* Pages */}
+                    {/* Pages & Visuals */}
                     <td className="py-4 px-6 text-xs text-neutral-600 font-mono">
-                      {doc.total_pages}
+                      <div className="flex items-center gap-2">
+                        <span>{doc.total_pages} {doc.total_pages === 1 ? 'page' : 'pages'}</span>
+                        {doc.total_visuals !== undefined && doc.total_visuals > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-mono text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200" title={`${doc.total_visuals} diagrams/images extracted`}>
+                            <ImageIcon size={10} className="text-emerald-600" />
+                            <span>{doc.total_visuals}</span>
+                          </span>
+                        )}
+                      </div>
                     </td>
 
                     {/* Added */}

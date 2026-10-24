@@ -22,6 +22,7 @@ export interface DocumentResponse {
   total_chunks: number;
   total_entities: number;
   total_relationships: number;
+  total_visuals?: number;
   created_at: string;
   updated_at: string;
   error_message?: string | null;
@@ -186,6 +187,7 @@ export type QueryIntent =
   | "FACTUAL"
   | "MULTI_HOP"
   | "DOCUMENT_SPECIFIC"
+  | "VISUAL_GROUNDED"
   | "UNANSWERABLE";
 
 export type RetrievalStrategy =
@@ -208,6 +210,8 @@ export interface Citation {
   page_number: number;
   excerpt: string;
   relevance_score: number;
+  visual_id?: string | null;
+  image_url?: string | null;
 }
 
 export interface QueryRequest {
@@ -232,7 +236,114 @@ export interface QueryResponse {
   supporting_paths: GraphPath[];
   retrieval_trace: string[];
   warnings: string[];
+  model_used?: string;
+  visual_evidence?: VisualEvidence[];
+  generated_visual?: GeneratedVisual | null;
   metadata: Record<string, any>;
+}
+
+export interface ChatMessage {
+  id: string;
+  sender: 'user' | 'assistant';
+  text: string;
+  timestamp: string;
+  response?: QueryResponse;
+  visual_evidence?: VisualEvidence[];
+  generated_visual?: GeneratedVisual | null;
+}
+
+// ==========================================
+// VISUALS & MULTIMODAL (backend/app/schemas/visuals.py)
+// ==========================================
+
+export type VisualType =
+  | "DIAGRAM"
+  | "CHART"
+  | "TABLE"
+  | "FLOWCHART"
+  | "CONCEPT_MAP"
+  | "SCREENSHOT"
+  | "ILLUSTRATION"
+  | "PHOTO"
+  | "DOCUMENT_PAGE";
+
+export interface VisualEvidence {
+  id: string;
+  document_id: string;
+  document_filename: string;
+  page_number: number;
+  image_path: string;
+  image_url: string;
+  content_hash: string;
+  width?: number | null;
+  height?: number | null;
+  format: string;
+  caption?: string | null;
+  surrounding_text?: string | null;
+  visual_type: VisualType;
+  title?: string | null;
+  extracted_text?: string | null;
+  description: string;
+  detailed_analysis?: string | null;
+  structured_data?: Record<string, any> | null;
+  detected_labels: string[];
+  related_concept_names: string[];
+  confidence: number;
+  analysis_provider: string;
+  analysis_status?: string;
+  analysis_error?: string | null;
+  is_page_render: boolean;
+  metadata?: Record<string, any>;
+}
+
+export type VisualGenerationType =
+  | "FLOWCHART"
+  | "CONCEPT_MAP"
+  | "TECHNICAL_DIAGRAM"
+  | "ILLUSTRATION"
+  | "GRAPH_VISUALIZATION";
+
+export interface VisualGenerationRequest {
+  prompt: string;
+  visual_type: VisualGenerationType;
+  context?: string | null;
+  document_ids?: string[];
+  source_message_id?: string | null;
+  model?: string | null;
+}
+
+export interface GeneratedVisual {
+  id: string;
+  visual_type: VisualGenerationType;
+  render_format: "mermaid" | "svg" | "image_url" | string;
+  content: string;
+  title: string;
+  caption?: string | null;
+  prompt: string;
+  generated_by: string;
+  created_at: string;
+  source_concepts?: string[];
+  download_url?: string | null;
+  status?: string;
+  error_message?: string | null;
+  metadata?: Record<string, any>;
+}
+
+export interface ModelItem {
+  name: string;
+  display_name: string;
+  provider: string;
+  parameter_size?: string | null;
+  size_bytes?: number | null;
+  is_local: boolean;
+  is_default: boolean;
+  description?: string | null;
+}
+
+export interface ModelsListResponse {
+  active_model: string;
+  provider: string;
+  models: ModelItem[];
 }
 
 // ==========================================

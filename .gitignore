@@ -22,3 +22,24 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local configuration and credentials (keep example templates tracked)
+.env
+.env.*
+!.env.example
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime document and database storage
+backend/data/
+backend/uploads/
+backend/storage/
+*.db
+*.sqlite3

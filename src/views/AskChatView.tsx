@@ -85,6 +85,16 @@ export const AskChatView: React.FC<AskChatViewProps> = ({ onOpenCitation }) => {
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (err) {
       console.error('Chat error:', err);
+      const message = err instanceof Error ? err.message : 'The request could not be completed.';
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `msg-${Date.now() + 1}`,
+          sender: 'assistant' as const,
+          text: `I couldn't complete that request. ${message}`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
     } finally {
       setIsLoading(false);
     }
@@ -92,8 +102,9 @@ export const AskChatView: React.FC<AskChatViewProps> = ({ onOpenCitation }) => {
 
   const samplePrompts = [
     'Explain the attention mechanism in transformers with a simple example from my notes.',
+    'Explain the diagrams and visual figures in the uploaded documents.',
+    'Generate a flowchart explaining the core architecture and workflow.',
     'Compare BERT and GPT architectures based on my study material.',
-    'What are the core components required for Transformer training?',
   ];
 
   return (

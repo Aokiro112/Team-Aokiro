@@ -11,6 +11,11 @@ import {
   TopicDetailResponse,
   TopicListResponse,
   TopicModel,
+  ModelItem,
+  ModelsListResponse,
+  GeneratedVisual,
+  VisualEvidence,
+  VisualGenerationRequest,
 } from '../types/backend';
 import {
   INITIAL_CHAT_MESSAGES,
@@ -45,6 +50,13 @@ export function getAppConfig(): AppConfig {
 
 export function saveAppConfig(cfg: AppConfig): void {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(cfg));
+}
+
+export function resolveApiAssetUrl(assetUrl: string): string {
+  if (!assetUrl) return assetUrl;
+  if (/^(?:https?:|data:|blob:)/i.test(assetUrl)) return assetUrl;
+  const base = getAppConfig().apiBaseUrl.replace(/\/$/, '');
+  return `${base}${assetUrl.startsWith('/') ? assetUrl : `/${assetUrl}`}`;
 }
 
 // In-memory reactive state for mock changes (upload, delete, etc.)
@@ -92,6 +104,8 @@ export const documentsApi = {
     onProgress?: (stage: string, progress: number) => void
   ): Promise<{ document: DocumentResponse; job_id: string }> {
     const config = getAppConfig();
+    let acceptedUpload = false;
+    let backendResponded = false;
     if (!config.useMock) {
       try {
         const formData = new FormData();
@@ -101,11 +115,30 @@ export const documentsApi = {
           method: 'POST',
           body: formData,
         });
+        backendResponded = true;
         if (res.ok) {
+          acceptedUpload = true;
           const data = await res.json();
-          return { document: data.document, job_id: data.job_id || 'mock-job' };
+          const jobId = data.job_id || 'mock-job';
+          if (data.job_id && onProgress) {
+            for (let attempt = 0; attempt < 240; attempt += 1) {
+              await new Promise((resolve) => setTimeout(resolve, 500));
+              const jobResponse = await fetch(`${config.apiBaseUrl}/jobs/${data.job_id}`);
+              if (!jobResponse.ok) break;
+              const job = await jobResponse.json();
+              onProgress(job.current_stage || 'PROCESSING', Number(job.progress_percent || 0));
+              if (job.status === 'COMPLETED') break;
+              if (job.status === 'FAILED') {
+                throw new Error(job.error_message || 'Document processing failed.');
+              }
+            }
+          }
+          return { document: data.document, job_id: jobId };
         }
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData?.error?.message || errorData?.detail || `Upload failed (${res.status}).`);
       } catch (err) {
+        if (acceptedUpload || backendResponded) throw err;
         console.warn('Backend upload failed, simulating ingestion pipeline:', err);
       }
     }
@@ -475,5 +508,62 @@ export const chatApi = {
       warnings: [],
       metadata: { latency_ms: 45 },
     };
+  },
+};
+
+// ==========================================
+// VISUALS & MULTIMODAL API
+// ==========================================
+export const visualsApi = {
+  getImageUrl(imageId: string): string {
+    const config = getAppConfig();
+    return `${config.apiBaseUrl}/documents/images/${imageId}`;
+  },
+
+  async getDocumentVisuals(documentId: string): Promise<VisualEvidence[]> {
+    const config = getAppConfig();
+    if (!config.useMock) {
+      try {
+        const res = await fetch(`${config.apiBaseUrl}/documents/${documentId}/visuals`);
+        if (res.ok) return await res.json();
+      } catch (err) {
+        console.warn(`Failed to fetch visuals for document ${documentId}:`, err);
+      }
+    }
+    return [];
+  },
+
+  async generateVisual(request: VisualGenerationRequest): Promise<GeneratedVisual> {
+    const config = getAppConfig();
+    try {
+      const res = await fetch(`${config.apiBaseUrl}/chat/visualize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      throw new Error(`Server returned ${res.status}`);
+    } catch (err: any) {
+      console.warn('Backend visual generation call failed, falling back:', err);
+      // Fallback deterministic Mermaid code
+      const promptLower = request.prompt.toLowerCase();
+      let code = `flowchart TD\n    A["Start: ${request.prompt.slice(0, 30)}"] --> B["Processing Engine"]\n    B --> C["Knowledge Graph"]\n    C --> D["Validated Output"]`;
+      if (request.visual_type === 'CONCEPT_MAP') {
+        code = `graph LR\n    C1["${request.prompt.slice(0, 25)}"] -- relates to --> C2["Core Concept"]\n    C2 -- connected to --> C3["Evidence"]`;
+      }
+      return {
+        id: `mock-vis-${Date.now()}`,
+        visual_type: request.visual_type,
+        render_format: 'mermaid',
+        content: code,
+        title: `${request.visual_type.replace('_', ' ')}: ${request.prompt.slice(0, 40)}`,
+        caption: 'Client fallback diagram generated locally.',
+        prompt: request.prompt,
+        generated_by: 'client_fallback',
+        created_at: new Date().toISOString(),
+      };
+    }
   },
 };
