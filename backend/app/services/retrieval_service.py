@@ -91,7 +91,6 @@ class RetrievalService:
             trace.append("evidence_fusion")
 
         # Fallback handling
-        if not retrieved_chunks and strategy != RetrievalStrategy.VECTOR_ONLY:
             trace.append("fallback_to_vector_search")
             retrieved_chunks = await self.vector_svc.search(
                 query=query,
@@ -101,6 +100,21 @@ class RetrievalService:
             )
             if not retrieved_chunks:
                 warnings.append("Insufficient evidence found across vector and graph indices.")
+
+        # Synthetic Record Quarantine: Filter synthetic fixtures from real-world answers unless explicitly queried
+        q_lower_check = query.lower()
+        asks_about_synthetic = any(w in q_lower_check for w in ["synthetic", "fixture", "northstar", "testland", "syn-", "example beverage group"])
+        if not asks_about_synthetic:
+            retrieved_chunks = [
+                c for c in retrieved_chunks
+                if "status=synthetic" not in (c.get("text") or "").lower()
+                and "synthetic records for parser" not in (c.get("text") or "").lower()
+            ]
+            related_entities = [e for e in related_entities if e.metadata.get("dataset_status") != "SYNTHETIC"]
+            supporting_paths = [
+                p for p in supporting_paths
+                if not any(e.metadata.get("dataset_status") == "SYNTHETIC" for e in p.edges)
+            ]
 
         trace.append("evidence_validation")
         return {
@@ -193,17 +207,25 @@ class RetrievalService:
         """Find matching topics and retrieve representative passages and entities."""
         q_lower = query.lower()
         matched_topics = []
+        import re as _re
+        query_words = set(_re.findall(r'\b[a-z]{4,}\b', q_lower)) - {
+            'what', 'where', 'when', 'which', 'does', 'this', 'that', 'with',
+            'from', 'have', 'about', 'there', 'across', 'main', 'most', 'your',
+            'their', 'these', 'those', 'some', 'very', 'just', 'also', 'then'
+        }
         for topic in self.repo.memory_engine.topic_nodes.values():
-            if topic.name.lower() in q_lower or any(kw in q_lower for kw in topic.keywords):
+            topic_words = set(_re.findall(r'\b[a-z]{4,}\b', topic.name.lower()))
+            keyword_match = any(kw in q_lower for kw in topic.keywords)
+            word_overlap = bool(topic_words & query_words)
+            if keyword_match or word_overlap or topic.name.lower() in q_lower:
                 matched_topics.append(topic)
 
         if not matched_topics:
-            # Pick top topics by entity count
             matched_topics = sorted(
                 self.repo.memory_engine.topic_nodes.values(),
                 key=lambda t: t.entity_count,
                 reverse=True,
-            )[:3]
+            )[:5]
 
         topic_chunks: List[Dict[str, Any]] = []
         entities: List[NodeModel] = []

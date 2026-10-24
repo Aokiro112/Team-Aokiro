@@ -110,11 +110,17 @@ class EntityResolutionService:
         # Exact slug match
         if candidate_slug in existing_map:
             existing = existing_map[candidate_slug]
-            if self._are_types_compatible(candidate.entity_type, existing.entity_type):
+            cand_status = candidate.metadata.get("dataset_status", "FACT")
+            exist_status = existing.metadata.get("dataset_status", "FACT")
+            if cand_status == exist_status and self._are_types_compatible(candidate.entity_type, existing.entity_type):
                 return candidate_slug
 
         # Acronym check (e.g. AI vs Artificial Intelligence)
+        cand_status = candidate.metadata.get("dataset_status", "FACT")
         for slug, existing in existing_map.items():
+            exist_status = existing.metadata.get("dataset_status", "FACT")
+            if cand_status != exist_status:
+                continue
             if not self._are_types_compatible(candidate.entity_type, existing.entity_type):
                 continue
 
@@ -134,8 +140,9 @@ class EntityResolutionService:
             return True
         # Incompatible distinct categories
         incompatibles = [
-            ({"person"}, {"organization", "technology", "policy"}),
-            ({"policy"}, {"technology", "person"}),
+            ({"person"}, {"organization", "technology", "policy", "brand"}),
+            ({"policy"}, {"technology", "person", "brand"}),
+            ({"brand"}, {"organization", "person", "place"}),
         ]
         for s1, s2 in incompatibles:
             if (t1 in s1 and t2 in s2) or (t1 in s2 and t2 in s1):

@@ -296,8 +296,11 @@ class InMemoryGraphEngine:
 
             edges: List[EdgeModel] = []
             evidence_chunks: List[str] = []
+            hop_descriptions: List[str] = []
             for i in range(len(path_nodes_ids) - 1):
                 u, v = path_nodes_ids[i], path_nodes_ids[i + 1]
+                u_name = self.entity_nodes[u].canonical_name if u in self.entity_nodes else u
+                v_name = self.entity_nodes[v].canonical_name if v in self.entity_nodes else v
                 # Find matching edge in edge_records in either direction
                 matched_edge = None
                 for edge in self.edge_records.values():
@@ -307,8 +310,15 @@ class InMemoryGraphEngine:
                 if matched_edge:
                     edges.append(matched_edge)
                     evidence_chunks.extend(matched_edge.chunk_ids)
+                    rel = matched_edge.relationship_type
+                    if matched_edge.source == u:
+                        hop_descriptions.append(f"{u_name} —[{rel}]→ {v_name}")
+                    else:
+                        hop_descriptions.append(f"{u_name} ←[{rel}]— {v_name}")
+                else:
+                    hop_descriptions.append(f"{u_name} —[RELATED_TO]→ {v_name}")
 
-            path_desc = " <-> ".join([n.canonical_name for n in nodes])
+            path_desc = " ; ".join(hop_descriptions) if hop_descriptions else " — ".join([n.canonical_name for n in nodes])
             results.append(
                 GraphPath(
                     nodes=nodes,

@@ -140,10 +140,50 @@ class DocumentService:
         logger.info(f"Registered document {filename} with ID {document_id}")
         return DocumentResponse(**record), file_path, False
 
+    @staticmethod
+    def _strip_running_headers_and_footers(raw_pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Dynamically detect and strip repetitive running headers and footers across any document."""
+        if len(raw_pages) <= 2:
+            return raw_pages
+
+        import re
+        top_line_counts: Dict[str, int] = {}
+        bottom_line_counts: Dict[str, int] = {}
+
+        for p in raw_pages:
+            lines = [l.strip() for l in p["text"].splitlines() if len(l.strip()) > 3]
+            for l in lines[:3]:
+                top_line_counts[l] = top_line_counts.get(l, 0) + 1
+            for l in lines[-2:]:
+                bottom_line_counts[l] = bottom_line_counts.get(l, 0) + 1
+
+        # Any line appearing at the top/bottom on >= 25% of pages is a running header/footer
+        threshold = max(3, int(len(raw_pages) * 0.25))
+        repetitive_headers = {l for l, count in top_line_counts.items() if count >= threshold}
+        repetitive_footers = {l for l, count in bottom_line_counts.items() if count >= threshold}
+
+        cleaned_pages = []
+        for p in raw_pages:
+            lines = p["text"].splitlines()
+            kept = []
+            for l in lines:
+                s = l.strip()
+                if s in repetitive_headers or s in repetitive_footers:
+                    continue
+                if re.match(r"^(?:page\s*\d+|\d+\s*/\s*\d+|-\s*\d+\s*-|\d+)$", s, re.IGNORECASE):
+                    continue
+                kept.append(l)
+            cleaned_text = "\n".join(kept).strip()
+            cleaned_pages.append({
+                "page_number": p["page_number"],
+                "text": cleaned_text or p["text"]
+            })
+        return cleaned_pages
+
     def extract_text(self, file_path: Path) -> List[Dict[str, Any]]:
-        """Extract text from PDF or text file while preserving page numbers."""
+        """Extract text from PDF or text file while preserving page numbers and dynamically stripping headers."""
         ext = file_path.suffix.lower()
-        pages: List[Dict[str, Any]] = []
+        raw_pages: List[Dict[str, Any]] = []
 
         if ext == ".pdf":
             try:
@@ -151,7 +191,7 @@ class DocumentService:
                 for page_num in range(len(doc)):
                     page = doc[page_num]
                     text = page.get_text()
-                    pages.append({"page_number": page_num + 1, "text": text})
+                    raw_pages.append({"page_number": page_num + 1, "text": text})
                 doc.close()
             except Exception as e:
                 logger.error(f"Error extracting text from PDF {file_path}: {e}")
@@ -160,12 +200,12 @@ class DocumentService:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     text = f.read()
-                pages.append({"page_number": 1, "text": text})
+                raw_pages.append({"page_number": 1, "text": text})
             except Exception as e:
                 logger.error(f"Error reading text file {file_path}: {e}")
                 raise NexusException(f"Failed to read file: {e}", status_code=400)
 
-        return pages
+        return self._strip_running_headers_and_footers(raw_pages)
 
     def chunk_document(
         self,

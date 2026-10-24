@@ -126,7 +126,7 @@ class TopicService:
             key=lambda t: (t.entity_count, len(t.keywords), len(t.representative_passages)),
             reverse=True,
         )
-        selected_topics = sorted_topics[:15]
+        selected_topics = sorted_topics[:8]
 
         # Persist selected topics in graph repository
         for topic in selected_topics:

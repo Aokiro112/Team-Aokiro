@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+// @ts-ignore
+import ForceGraph2D from 'react-force-graph-2d';
 import {
   UploadCloud,
   FileText,
@@ -83,6 +85,7 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
 
   // Graph state
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fgRef = useRef<any>(null);
   const [rawNodes, setRawNodes] = useState<NodeModel[]>([]);
   const [rawEdges, setRawEdges] = useState<EdgeModel[]>([]);
   const [filterType, setFilterType] = useState<string>('All');
@@ -178,23 +181,44 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
     }
 
     if (densityLimit === 'core') {
-      // Prioritize topics + top 15 highest degree entities
-      const topics = list.filter((n) => n.entity_type === 'Topic');
-      const nonTopics = list.filter((n) => n.entity_type !== 'Topic').slice(0, 15);
+      const nonTopics = list.filter((n) => n.entity_type !== 'Topic').slice(0, 20);
+      const nonTopicIds = new Set(nonTopics.map(n => n.id));
+      const connectedEdges = rawEdges.filter(e => nonTopicIds.has(e.source) || nonTopicIds.has(e.target));
+      const connectedTopicIds = new Set(connectedEdges.map(e => e.source).concat(connectedEdges.map(e => e.target)));
+      const topics = list.filter((n) => n.entity_type === 'Topic' && connectedTopicIds.has(n.id));
       return [...topics, ...nonTopics];
     } else if (densityLimit === 'standard') {
-      const topics = list.filter((n) => n.entity_type === 'Topic');
-      const nonTopics = list.filter((n) => n.entity_type !== 'Topic').slice(0, 35);
+      const nonTopics = list.filter((n) => n.entity_type !== 'Topic').slice(0, 45);
+      const nonTopicIds = new Set(nonTopics.map(n => n.id));
+      const connectedEdges = rawEdges.filter(e => nonTopicIds.has(e.source) || nonTopicIds.has(e.target));
+      const connectedTopicIds = new Set(connectedEdges.map(e => e.source).concat(connectedEdges.map(e => e.target)));
+      const topics = list.filter((n) => n.entity_type === 'Topic' && connectedTopicIds.has(n.id));
       return [...topics, ...nonTopics];
     }
     return list;
-  }, [rawNodes, densityLimit, searchGraphQuery]);
+  }, [rawNodes, rawEdges, densityLimit, searchGraphQuery]);
 
   const activeNodeIds = useMemo(() => new Set(activeNodes.map((n) => n.id)), [activeNodes]);
 
   const activeEdges = useMemo(() => {
     return rawEdges.filter((e) => activeNodeIds.has(e.source) && activeNodeIds.has(e.target));
   }, [rawEdges, activeNodeIds]);
+
+  const graphData = useMemo(() => ({
+    nodes: activeNodes.map(n => ({ ...n, id: n.id, name: n.canonical_name, val: n.entity_type === 'Topic' ? 10 : Math.min(13, Math.max(5, (n.degree || 1) * 0.8 + 3)) })),
+    links: activeEdges.map(e => ({ ...e, source: e.source, target: e.target }))
+  }), [activeNodes, activeEdges]);
+
+  // Tune D3 physics layout for comfortable spacing and collision avoidance
+  useEffect(() => {
+    if (fgRef.current) {
+      const fg = fgRef.current;
+      if (typeof fg.d3Force === 'function') {
+        fg.d3Force('charge')?.strength(-260);
+        fg.d3Force('link')?.distance(85);
+      }
+    }
+  }, [graphData]);
 
   // Extract list of unique topics for quick-zoom bar
   const topicList = useMemo(() => {
@@ -309,6 +333,7 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
       title: `${resp.intent} Evidence Highlighted`,
       count: nodeIds.size,
     });
+    setTimeout(() => { if (fgRef.current) fgRef.current.zoomToFit(400, 60); }, 350);
 
     // Focus camera on centroid of highlighted nodes
     if (nodeIds.size > 0 && nodeSimMapRef.current.size > 0) {
@@ -335,22 +360,20 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
   };
 
   const zoomToTopicCluster = (topic: NodeModel) => {
-    const pos = nodeSimMapRef.current.get(topic.id);
-    if (pos) {
-      setPan({ x: -pos.x * zoom, y: -pos.y * zoom });
-      setZoom(1.15);
-      // Highlight topic and its connected entities
-      const linked = new Set<string>([topic.id]);
-      activeEdges.forEach((e) => {
-        if (e.source === topic.id) linked.add(e.target);
-        if (e.target === topic.id) linked.add(e.source);
-      });
-      setHighlightedNodeIds(linked);
-      setHighlightInfo({
-        title: `Cluster: ${topic.canonical_name}`,
-        count: linked.size,
-      });
+    if (fgRef.current) {
+      const gnode = graphData.nodes.find((n: any) => n.id === topic.id);
+      if (gnode && (gnode as any).x !== undefined) {
+        fgRef.current.centerAt((gnode as any).x, (gnode as any).y, 600);
+        fgRef.current.zoom(2.2, 600);
+      }
     }
+    const linked = new Set<string>([topic.id]);
+    activeEdges.forEach((e) => {
+      if (e.source === topic.id) linked.add(e.target as string);
+      if (e.target === topic.id) linked.add(e.source as string);
+    });
+    setHighlightedNodeIds(linked);
+    setHighlightInfo({ title: `Cluster: ${topic.canonical_name}`, count: linked.size });
   };
 
   // 4. Send Chat Query
@@ -898,6 +921,23 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
     'What is the relationship between Morrie and Mitch?',
   ];
 
+  const getBaseColor = (type: string): string => {
+    switch (type) {
+      case 'Topic': return '#7C3AED';
+      case 'Person': return '#10b981';
+      case 'Organization': return '#f59e0b';
+      case 'Technology': return '#06b6d4';
+      case 'MedicalCondition': return '#ef4444';
+      case 'Work': return '#8b5cf6';
+      default: return '#6366f1';
+    }
+  };
+
+  const getNodeColor = (node: any): string => {
+    if (highlightedNodeIds.size > 0 && !highlightedNodeIds.has(node.id)) return '#1e293b';
+    return getBaseColor(node.entity_type);
+  };
+
   return (
     <div className="flex h-[calc(100vh-4rem)] w-full overflow-hidden bg-white">
       {/* ======================================================== */}
@@ -1267,13 +1307,57 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
 
         {/* Canvas Renderer */}
         <div className="flex-1 h-full w-full relative">
-          <canvas
-            ref={canvasRef}
-            onMouseDown={handleCanvasMouseDown}
-            onMouseMove={handleCanvasMouseMove}
-            onMouseUp={handleCanvasMouseUp}
-            onWheel={handleWheel}
-            className="w-full h-full cursor-grab active:cursor-grabbing block"
+          {/* @ts-ignore */}
+          <ForceGraph2D
+            ref={fgRef}
+            graphData={graphData}
+            nodeId="id"
+            nodeColor={(node: any) => getNodeColor(node)}
+            nodeVal={(node: any) => node.val}
+            nodeLabel={(node: any) => node.name}
+            linkColor={(link: any) => highlightedEdgeIds.has((link as any).id) ? '#10b981' : (link as any).relationship_type === 'BELONGS_TO_TOPIC' ? '#DDD6FE' : '#94a3b8'}
+            linkWidth={(link: any) => highlightedEdgeIds.has((link as any).id) ? 2.5 : 1}
+            linkDirectionalArrowLength={5}
+            linkDirectionalArrowRelPos={1}
+            linkLabel={(link: any) => (link as any).relationship_type || ''}
+            onNodeClick={(node: any) => handleSelectNode(node as NodeModel)}
+            nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+              const isTopic = node.entity_type === 'Topic';
+              const isSynthetic = node.metadata?.dataset_status === 'SYNTHETIC';
+              const r = isTopic ? 10 : Math.min(13, Math.max(5, (node.degree || 1) * 0.8 + 3));
+              const isHighlighted = highlightedNodeIds.has(node.id);
+              const isSelected = selectedNode?.id === node.id;
+              const dimmed = highlightedNodeIds.size > 0 && !isHighlighted;
+
+              ctx.beginPath();
+              ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
+              ctx.fillStyle = dimmed ? '#1e293b' : isSynthetic ? '#f97316' : getBaseColor(node.entity_type);
+              ctx.fill();
+
+              if (isHighlighted || isSelected) {
+                ctx.strokeStyle = isSelected ? '#ffffff' : '#10b981';
+                ctx.lineWidth = 2.5 / globalScale;
+                ctx.stroke();
+              } else if (isSynthetic) {
+                ctx.strokeStyle = '#fdba74';
+                ctx.lineWidth = 1.8 / globalScale;
+                ctx.stroke();
+              }
+
+              const fontSize = Math.max(isTopic ? 11 : 9, (isTopic ? 13 : 10) / globalScale);
+              ctx.font = `${isTopic ? 'bold ' : ''}${fontSize}px Inter, Sans-Serif`;
+              ctx.fillStyle = dimmed ? '#334155' : isSynthetic ? '#fdba74' : '#e2e8f0';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'top';
+              ctx.fillText(node.name, node.x, node.y + r + 2 / globalScale);
+            }}
+            nodeCanvasObjectMode={() => 'replace'}
+            backgroundColor="#0f172a"
+            cooldownTicks={100}
+            d3AlphaDecay={0.025}
+            d3VelocityDecay={0.35}
+            // @ts-ignore
+            className="w-full h-full"
           />
 
           {/* Floating Node Inspector Flyout */}

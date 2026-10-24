@@ -80,9 +80,9 @@ class Settings(BaseSettings):
 
     # LLM Provider
     # Options: "ollama", "openai", "rule_based"
-    LLM_PROVIDER: str = "rule_based"
+    LLM_PROVIDER: str = "ollama"
     LLM_BASE_URL: str = "http://localhost:11434"
-    LLM_MODEL: str = "llama3.2"
+    LLM_MODEL: str = "qwen3:1.7b"
     LLM_API_KEY: str = ""
     LLM_TIMEOUT_SECONDS: float = 45.0
     LLM_TEMPERATURE: float = 0.1

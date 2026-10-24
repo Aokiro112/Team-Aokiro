@@ -190,10 +190,18 @@ class AnswerService:
 
     async def _call_ollama(self, query: str, context: str, model: Optional[str] = None) -> Optional[str]:
         target_model = model or self.model
-        prompt = f"""You are NEXUS AI, an evidence-grounded document assistant.
-Answer the user's question using ONLY the provided evidence.
-Do not assume or fabricate facts. Always cite sources like [1], [2].
-If evidence is insufficient, state that explicitly.
+        prompt = f"""You are NEXUS AI, an advanced evidence-grounded research assistant.
+Your task is to write a cohesive, comprehensive, and well-written answer to the user's question based strictly on the provided Context.
+
+STRICT INSTRUCTIONS:
+1. Answer the question directly with clear, natural, and fluent prose in well-structured paragraphs.
+2. When detailing products, categories, or metrics, use clear bullet points.
+3. Every factual statement must cite its source bracketed citation like [1], [2].
+4. If the question asks about unverified, confidential, or unanswerable topics, clearly state that the fact is not established in the available corpus—never fabricate or speculate.
+5. If the evidence marks records as synthetic or test fixtures, explicitly state that they are test fixtures, not real-world entities.
+6. If Knowledge Graph Paths are provided below, synthesize how they connect the concepts, and end your response with a section titled:
+### Supporting Knowledge Graph Connections:
+followed by the directed relations.
 
 Context:
 {context}
@@ -216,7 +224,13 @@ Answer:"""
 
     async def _call_openai(self, query: str, context: str) -> Optional[str]:
         headers = {"Authorization": f"Bearer {settings.LLM_API_KEY}"}
-        prompt = f"Answer using ONLY the provided evidence:\n\n{context}\n\nQuestion: {query}"
+        prompt = f"""You are NEXUS AI, an advanced evidence-grounded research assistant.
+Answer the user's question using strictly the provided Context. Answer directly, cite sources like [1], and include directed graph paths if present.
+
+Context:
+{context}
+
+Question: {query}"""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.post(
                 f"{self.base_url}/v1/chat/completions",
@@ -241,22 +255,46 @@ Answer:"""
         paths: List[GraphPath],
         citations: List[Any],
     ) -> str:
-        """Deterministic extractive synthesis for offline / zero-hallucination execution."""
-        sentences = []
+        """High-precision dynamic extractive synthesis with clean sentence scoring and zero hardcoding."""
+        q_lower = query.lower()
+
+        # If no citations or chunks, cleanly state evidence limitation
+        if not citations and not chunks:
+            return "Based on the available documents in the knowledge base, there is insufficient evidence to directly answer this question."
+
+        # Extract and sanitize informative sentences from citations
+        cleaned_passages = []
         for idx, citation in enumerate(citations):
-            # Extract first sentence of citation excerpt
-            first_sentence = re.split(r"(?<=[.!?])\s+", citation.excerpt)[0].strip()
-            if first_sentence:
-                sentences.append(f"{first_sentence} [{idx+1}]")
+            raw_text = citation.excerpt or ""
+            lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+            clean_excerpt = " ".join(lines)
+            clean_excerpt = re.sub(r"^\d{1,2}\s*\|\s*[^:\n]+:\s*", "", clean_excerpt)
 
-        if not sentences and chunks:
-            sentences.append(chunks[0].get("text", "")[:200])
+            # Split into clean sentences
+            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", clean_excerpt) if len(s.strip()) > 20]
+            if sentences:
+                # Prioritize sentence with highest keyword overlap to query
+                query_words = set(re.findall(r"\b[a-z]{4,}\b", q_lower))
+                best_s = sentences[0]
+                best_score = -1
+                for s in sentences:
+                    s_words = set(re.findall(r"\b[a-z]{4,}\b", s.lower()))
+                    overlap = len(s_words & query_words)
+                    if overlap > best_score:
+                        best_score = overlap
+                        best_s = s
+                cleaned_passages.append(f"{best_s} [{idx+1}]")
 
-        body = " ".join(sentences)
+        if not cleaned_passages and chunks:
+            raw_c = chunks[0].get("text", "")
+            first_line = raw_c.split("\n")[0][:200]
+            cleaned_passages.append(f"{first_line} [1]")
+
+        body = "\n\n".join(cleaned_passages)
 
         if paths:
             path_texts = [f"• {p.description}" for p in paths]
-            body += "\n\nSupporting Knowledge Graph Connections:\n" + "\n".join(path_texts)
+            body += "\n\n### Supporting Knowledge Graph Connections:\n" + "\n".join(path_texts)
 
         return body
 
