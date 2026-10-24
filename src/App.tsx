@@ -52,6 +52,25 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleNewChat = () => {
+    handleClearChat();
+    if (currentTab !== 'workspace' && currentTab !== 'ask') {
+      setCurrentTab('workspace');
+    }
+  };
+
+  // Keyboard shortcut: ⌘N / Ctrl+N to trigger New Chat
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        handleNewChat();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentTab]);
+
   // Load documents
   const loadDocuments = async () => {
     const res = await documentsApi.listDocuments();
@@ -69,6 +88,7 @@ export const App: React.FC = () => {
         currentTab={currentTab}
         onSelectTab={(tab) => setCurrentTab(tab)}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onNewChat={handleNewChat}
       />
 
       {/* Main Content Area */}
@@ -77,6 +97,7 @@ export const App: React.FC = () => {
         <TopNavbar
           onOpenSearch={() => setIsSearchOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
+          onNewChat={handleNewChat}
         />
 
         {/* View Pages */}

@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Settings, Cpu, ChevronDown, Check, RefreshCw, Sparkles, CheckCircle2 } from 'lucide-react';
+import { Search, Settings, Cpu, ChevronDown, Check, RefreshCw, Sparkles, CheckCircle2, Plus } from 'lucide-react';
 import { getAppConfig, modelsApi } from '../../services/api';
 import { ModelItem } from '../../types/backend';
 
 interface TopNavbarProps {
   onOpenSearch: () => void;
   onOpenSettings: () => void;
+  onNewChat?: () => void;
 }
 
 export const TopNavbar: React.FC<TopNavbarProps> = ({
   onOpenSearch,
   onOpenSettings,
+  onNewChat,
 }) => {
   const config = getAppConfig();
   const [models, setModels] = useState<ModelItem[]>([]);
@@ -72,8 +74,9 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
 
   return (
     <header className="h-16 px-8 border-b border-[#F0F0F4] bg-white flex items-center justify-between gap-3 shrink-0">
-      {/* Left: Dynamic Local Model Selector Bar */}
-      <div className="relative" ref={dropdownRef}>
+      {/* Left: Dynamic Local Model Selector & Quick New Chat */}
+      <div className="flex items-center gap-2.5">
+        <div className="relative" ref={dropdownRef}>
         <button
           onClick={() => setShowModelDropdown(!showModelDropdown)}
           className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-neutral-100/90 hover:bg-neutral-100 border border-neutral-200/90 text-neutral-800 transition-all text-xs font-medium shadow-2xs group"
@@ -173,6 +176,18 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
               })}
             </div>
           </div>
+        )}
+      </div>
+
+        {onNewChat && (
+          <button
+            onClick={onNewChat}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer"
+            title="Start a new chat (⌘N)"
+          >
+            <Plus size={13} strokeWidth={2.5} />
+            <span className="hidden sm:inline">New Chat</span>
+          </button>
         )}
       </div>
 

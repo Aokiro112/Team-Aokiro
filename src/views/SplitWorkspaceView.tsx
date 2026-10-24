@@ -1056,11 +1056,11 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
               </span>
               <button
                 onClick={handleClearChat}
-                className="flex items-center gap-1 text-[11px] font-medium text-neutral-400 hover:text-red-600 hover:bg-red-50 px-2 py-0.5 rounded-lg transition-colors cursor-pointer"
-                title="Clear conversation"
+                className="flex items-center gap-1.5 text-[11px] font-semibold text-neutral-600 hover:text-neutral-950 hover:bg-neutral-100 border border-neutral-200/90 px-2.5 py-1 rounded-lg transition-colors cursor-pointer shadow-2xs"
+                title="Start a new chat (⌘N)"
               >
-                <Trash2 size={12} />
-                <span>Clear chat</span>
+                <Plus size={12} strokeWidth={2.5} />
+                <span>New Chat</span>
               </button>
             </div>
           )}
@@ -1168,10 +1168,11 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
                 <button
                   type="button"
                   onClick={handleClearChat}
-                  className="px-2 py-0.8 rounded text-[10px] font-medium text-neutral-400 hover:text-red-600 hover:bg-red-50 border border-neutral-200/60 hover:border-red-200 transition-colors cursor-pointer"
-                  title="Clear chat history"
+                  className="flex items-center gap-1 px-2 py-0.8 rounded text-[10px] font-medium text-neutral-600 hover:text-black hover:bg-neutral-100 border border-neutral-200/80 transition-colors cursor-pointer"
+                  title="Start a new chat"
                 >
-                  Clear
+                  <Plus size={10} strokeWidth={2.5} />
+                  <span>New Chat</span>
                 </button>
               )}
               <button

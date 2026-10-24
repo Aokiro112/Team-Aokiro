@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Cpu,
   Trash2,
+  Plus,
 } from 'lucide-react';
 import { Citation, QueryRequest, QueryResponse, RetrievalStrategy, ChatMessage } from '../types/backend';
 import { chatApi } from '../services/api';
@@ -213,15 +214,15 @@ export const AskChatView: React.FC<AskChatViewProps> = ({
             )}
           </div>
 
-          {/* Clear Chat Button */}
+          {/* New Chat Button */}
           {messages.length > 0 && (
             <button
               onClick={handleClearChat}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-neutral-200 text-neutral-500 hover:text-red-600 hover:bg-red-50 hover:border-red-200 transition-colors cursor-pointer"
-              title="Clear conversation"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-neutral-200 text-neutral-700 hover:text-black hover:bg-neutral-100 transition-colors cursor-pointer shadow-2xs"
+              title="Start a new chat (⌘N)"
             >
-              <Trash2 size={13} />
-              <span>Clear</span>
+              <Plus size={13} strokeWidth={2.5} />
+              <span>New Chat</span>
             </button>
           )}
         </div>

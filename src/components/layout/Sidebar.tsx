@@ -8,6 +8,7 @@ import {
   Settings,
   ChevronDown,
   Columns,
+  Plus,
 } from 'lucide-react';
 
 export type NavigationTab = 'workspace' | 'home' | 'documents' | 'graph' | 'topics' | 'ask';
@@ -16,12 +17,14 @@ interface SidebarProps {
   currentTab: NavigationTab;
   onSelectTab: (tab: NavigationTab) => void;
   onOpenSettings: () => void;
+  onNewChat?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   currentTab,
   onSelectTab,
   onOpenSettings,
+  onNewChat,
 }) => {
   const navItems: Array<{
     id: NavigationTab;
@@ -40,7 +43,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className="w-64 min-w-[16rem] h-screen bg-white border-r border-[#EBEBEF] flex flex-col justify-between p-5 select-none shrink-0">
       {/* Top: Logo Branding */}
       <div>
-        <div className="flex items-center gap-2 mb-8 px-2 cursor-pointer" onClick={() => onSelectTab('home')}>
+        <div className="flex items-center gap-2 mb-6 px-2 cursor-pointer" onClick={() => onSelectTab('home')}>
           <div>
             <div className="flex items-center gap-1">
               <span className="text-xl font-black tracking-tight text-neutral-900 font-sans">
@@ -53,6 +56,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </p>
           </div>
         </div>
+
+        {/* New Chat Primary Button */}
+        {onNewChat && (
+          <button
+            onClick={onNewChat}
+            className="w-full flex items-center justify-between px-3.5 py-2.5 mb-5 rounded-xl border border-neutral-200/90 hover:border-neutral-900 bg-white hover:bg-neutral-50 text-neutral-800 hover:text-black font-semibold text-xs transition-all shadow-2xs group cursor-pointer"
+            title="Start a new chat (⌘N)"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="w-5 h-5 rounded-lg bg-neutral-900 text-white flex items-center justify-center group-hover:scale-105 transition-transform">
+                <Plus size={13} strokeWidth={2.5} />
+              </div>
+              <span className="font-semibold text-neutral-900">New Chat</span>
+            </div>
+            <kbd className="text-[10px] font-mono text-neutral-400 border border-neutral-200/80 px-1.5 py-0.5 rounded bg-neutral-50">
+              ⌘N
+            </kbd>
+          </button>
+        )}
 
         {/* Navigation list */}
         <nav className="space-y-1.5">
