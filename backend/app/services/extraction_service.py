@@ -542,8 +542,9 @@ Text:
             elif not candidate_themes and top_terms:
                 candidate_themes.append(f"{top_terms[0][0].capitalize()} Theme")
 
+        is_chunk_synthetic = "status=synthetic" in chunk_text.lower() or "syn-" in chunk_text.lower()
         for topic_name in candidate_themes[:2]:
-            is_syn_topic = chunk_is_synthetic or any(
+            is_syn_topic = is_chunk_synthetic or any(
                 w in topic_name.lower() for w in ["synthetic", "syn-", "fixture", "benchmark test", "test dataset", "rubric"]
             )
             tid = generate_topic_id(topic_name)
