@@ -941,9 +941,10 @@ export const SplitWorkspaceView: React.FC<SplitWorkspaceViewProps> = ({
   };
 
   const samplePrompts = [
-    'What are the main themes across these documents?',
-    'What lessons does Morrie teach about life and death?',
-    'What is the relationship between Morrie and Mitch?',
+    'Summarize the key findings and executive takeaways.',
+    'What are the main topics and entities covered in this knowledge base?',
+    'What are the most critical figures, metrics, or data points mentioned?',
+    'Explain how the primary concepts and entities are connected.',
   ];
 
   const getBaseColor = (type: string): string => {

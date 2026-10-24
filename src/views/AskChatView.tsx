@@ -134,9 +134,10 @@ export const AskChatView: React.FC<AskChatViewProps> = ({
   };
 
   const samplePrompts = [
-    'Explain the attention mechanism in transformers with a simple example from my notes.',
-    'Compare BERT and GPT architectures based on my study material.',
-    'What are the core components required for Transformer training?',
+    'Summarize the key findings and executive takeaways.',
+    'What are the main topics and entities covered in this knowledge base?',
+    'What are the most critical figures, metrics, or data points mentioned?',
+    'Explain how the primary concepts and entities are connected.',
   ];
 
   return (
